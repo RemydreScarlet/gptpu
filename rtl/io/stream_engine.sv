@@ -1,80 +1,95 @@
 import gptpu_pkg::*;
 
 module stream_engine (
-  // DDR controller interface
   output logic [DDR_CACHE_LINE*8-1:0] read_data_out,
   output logic                         read_valid,
   input  logic                         read_ready,
-
-  // PE core interface (data distribution)
   output logic [DDR_CACHE_LINE*8-1:0] pe_stream_data,
   output logic                         pe_stream_valid,
   input  logic                         pe_stream_ready,
-
-  // Credit flow
-  output logic [15:0] credit_available,
-  input  logic        credit_consume,
-
-  // Microcode stream commands
-  input  logic        stream_v,       // STREAM.V active
-  input  logic        stream_s,       // STREAM.S active
-  input  logic [31:0] stream_addr,    // DDR source addr
-  input  logic [31:0] stream_length,  // Transfer length
-
-  // Clock & reset
-  input  logic clk_io,
-  input  logic rst_n
+  output logic [15:0]                  credit_available,
+  input  logic                         credit_consume,
+  input  logic                         stream_v,
+  input  logic                         stream_s,
+  input  logic [31:0]                  stream_addr,
+  input  logic [31:0]                  stream_length,
+  input  logic                         clk_io,
+  input  logic                         rst_n
 );
 
   typedef enum logic [1:0] {
-    ST_IDLE,
-    ST_READ,
-    ST_DISTRIBUTE
-  } stream_state_t;
+    ST_IDLE, ST_READ, ST_WRITE, ST_DONE
+  } state_t;
 
-  stream_state_t state;
-  logic [31:0] read_ptr;
-  logic [31:0] words_remaining;
+  state_t state;
+  logic [31:0] ptr;
+  logic [31:0] remaining;
+  logic [15:0] credit;
+  logic [1023:0] buf;
+  logic buf_valid;
 
-  // Simplified streaming state machine
   always_ff @(posedge clk_io or negedge rst_n) begin
     if (!rst_n) begin
       state <= ST_IDLE;
-      read_ptr <= '0;
-      words_remaining <= '0;
+      ptr <= '0;
+      remaining <= '0;
+      credit <= DDR_CREDIT_MAX;
+      buf_valid <= 1'b0;
+      buf <= '0;
+      read_valid <= 1'b0;
+      pe_stream_valid <= 1'b0;
     end else begin
+      credit <= credit - credit_consume;
+
       unique case (state)
         ST_IDLE: begin
+          read_valid <= 1'b0;
+          pe_stream_valid <= 1'b0;
           if (stream_v || stream_s) begin
             state <= ST_READ;
-            read_ptr <= stream_addr;
-            words_remaining <= stream_length;
+            ptr <= stream_addr;
+            remaining <= stream_length;
           end
         end
+
         ST_READ: begin
-          if (read_ready && words_remaining > 0) begin
-            read_ptr <= read_ptr + DDR_CACHE_LINE;
-            words_remaining <= words_remaining - 1;
-          end
-          if (words_remaining == 0) begin
-            state <= ST_DISTRIBUTE;
+          if (stream_v && remaining > 0 && credit > 0) begin
+            read_valid <= 1'b1;
+            read_data_out <= '0;
+            if (read_ready) begin
+              buf <= read_data_out;
+              buf_valid <= 1'b1;
+              ptr <= ptr + DDR_CACHE_LINE;
+              remaining <= remaining - 1;
+            end
+          end else if (remaining == 0 || credit == 0) begin
+            state <= stream_v ? ST_DONE : ST_WRITE;
+            read_valid <= 1'b0;
           end
         end
-        ST_DISTRIBUTE: begin
-          if (pe_stream_ready) begin
-            state <= ST_IDLE;
+
+        ST_WRITE: begin
+          if (stream_s && buf_valid && pe_stream_ready) begin
+            pe_stream_valid <= 1'b1;
+            pe_stream_data <= buf;
+            buf_valid <= 1'b0;
           end
+          if (!buf_valid && remaining > 0) begin
+            state <= ST_READ;
+          end else if (!buf_valid && remaining == 0) begin
+            state <= ST_DONE;
+          end
+        end
+
+        ST_DONE: begin
+          pe_stream_valid <= 1'b0;
+          read_valid <= 1'b0;
+          state <= ST_IDLE;
         end
       endcase
     end
   end
 
-  // --- Credits (simplified) ---
-  assign credit_available = 16'd256;
-
-  // --- Data path ---
-  assign pe_stream_data  = read_data_out;
-  assign pe_stream_valid = read_valid;
-  assign read_data_out   = '0;
+  assign credit_available = credit;
 
 endmodule

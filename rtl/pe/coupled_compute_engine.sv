@@ -263,6 +263,11 @@ module coupled_compute_engine (
           noc_mode  = 3'd0;
           noc_send  = 1'b1;
         end
+        OP_RECV: begin
+          noc_dst_x = imm[7:0];
+          noc_dst_y = imm[15:8];
+          noc_mode  = imm[18:16];
+        end
 
         // --- Stream ops ---
         OP_STREAMV: begin

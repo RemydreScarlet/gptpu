@@ -5,9 +5,19 @@ module tb_pe_core;
   logic [7:0] pe_x, pe_y;
   logic clk_pe, clk_noc, rst_n;
 
-  noc_channel_t noc [7:0];
-  noc_channel_t l1_in, l1_out;
-  noc_channel_t l2_in, l2_out;
+  logic [63:0] l0_out_data  [8];
+  logic        l0_out_valid [8];
+  logic        l0_out_ready [8];
+  logic [63:0] l0_in_data   [8];
+  logic        l0_in_valid  [8];
+  logic        l0_in_ready  [8];
+
+  logic [63:0] l1_out_data, l1_in_data;
+  logic        l1_out_valid, l1_in_valid;
+  logic        l1_out_ready, l1_in_ready;
+  logic [63:0] l2_out_data, l2_in_data;
+  logic        l2_out_valid, l2_in_valid;
+  logic        l2_out_ready, l2_in_ready;
 
   microcode_word_t instr;
   logic            instr_valid;
@@ -19,11 +29,24 @@ module tb_pe_core;
   pe_core dut (
     .pe_x         (pe_x),
     .pe_y         (pe_y),
-    .noc          (noc),
-    .l1_in        (l1_in),
-    .l1_out       (l1_out),
-    .l2_in        (l2_in),
-    .l2_out       (l2_out),
+    .l0_out_data  (l0_out_data),
+    .l0_out_valid (l0_out_valid),
+    .l0_out_ready (l0_out_ready),
+    .l0_in_data   (l0_in_data),
+    .l0_in_valid  (l0_in_valid),
+    .l0_in_ready  (l0_in_ready),
+    .l1_out_data  (l1_out_data),
+    .l1_out_valid (l1_out_valid),
+    .l1_out_ready (l1_out_ready),
+    .l1_in_data   (l1_in_data),
+    .l1_in_valid  (l1_in_valid),
+    .l1_in_ready  (l1_in_ready),
+    .l2_out_data  (l2_out_data),
+    .l2_out_valid (l2_out_valid),
+    .l2_out_ready (l2_out_ready),
+    .l2_in_data   (l2_in_data),
+    .l2_in_valid  (l2_in_valid),
+    .l2_in_ready  (l2_in_ready),
     .instr        (instr),
     .instr_valid  (instr_valid),
     .pc           (pc),
@@ -42,24 +65,28 @@ module tb_pe_core;
     #100 rst_n = 1'b1;
 
     // Test VADD
-    instr.instr = {7'h02, 25'd0};  // VADD
+    instr.instr = {7'h02, 25'd0};
     instr_valid = 1'b1;
     #20;
 
     // Test VMAC
-    instr.instr = {7'h01, 25'd0};  // VMAC
+    instr.instr = {7'h01, 25'd0};
     #20;
 
-    // Test LUT lookup
-    instr.instr = {7'h23, 25'd0};  // LUT
+    // Test LUT
+    instr.instr = {7'h23, 25'd0};
     #20;
 
     // Test SWAPL
-    instr.instr = {7'h24, 25'd0};  // SWAPL
+    instr.instr = {7'h24, 25'd0};
     #20;
 
-    // Test branch
-    instr.instr = {7'h30, 25'd5};  // BNE +5
+    // Test BNE branch
+    instr.instr = {7'h30, 25'd5};
+    #20;
+
+    // Test SEND (should produce flit on L0)
+    instr.instr = {7'h41, (8'd5 << 8) | 8'd3};
     #20;
 
     instr_valid = 1'b0;

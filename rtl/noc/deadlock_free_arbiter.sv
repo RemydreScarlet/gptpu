@@ -1,17 +1,17 @@
 import gptpu_pkg::*;
 
 module deadlock_free_arbiter (
-  input  logic [7:0] req,        // 8 requestors
-  input  logic [3:0] priority,   // round-robin priority
+  input  logic [7:0] req,
+  input  logic [3:0] priority,
   output logic [2:0] grant,
-  output logic       any_grant
+  output logic       any_grant,
+  output logic [3:0] priority_next
 );
 
   logic [7:0] priority_mask;
   logic [7:0] masked_req;
   logic [7:0] grant_onehot;
 
-  // Priority mask: requests below priority are masked out
   always_comb begin
     priority_mask = '1;
     for (int i = 0; i < 8; i++) begin
@@ -21,15 +21,15 @@ module deadlock_free_arbiter (
 
   assign masked_req = req & priority_mask;
 
-  // Priority encoder on masked requests; fallback to unmasked
   always_comb begin
+    grant_onehot = '0;
     if (|masked_req) begin
       for (int i = 7; i >= 0; i--) begin
         if (masked_req[i]) begin
           grant_onehot = 8'b1 << i;
         end
       end
-    end else begin
+    end else if (|req) begin
       for (int i = 7; i >= 0; i--) begin
         if (req[i]) begin
           grant_onehot = 8'b1 << i;
@@ -53,5 +53,7 @@ module deadlock_free_arbiter (
       default:     grant = 3'd0;
     endcase
   end
+
+  assign priority_next = any_grant ? (grant + 1) : priority;
 
 endmodule
