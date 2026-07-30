@@ -171,17 +171,17 @@ class Assembler:
             if mnemonic == 'VMAC':
                 if len(ops) > 2 and addr_d != addr_a:
                     # VMAC writeback: bit-24=1, addr_d in bits 0-15, addr_b in bits 16-23
-                    imm = (addr_d & 0xFFFF) | ((addr_b & 0x1FF) << 16) | (1 << 24)
+                    imm = (addr_d & 0xFFFF) | ((addr_b & 0xFFFF) << 16) | (1 << 24)
                 else:
                     # VMAC accumulate: addr_a in bits 0-15, addr_b in bits 16-23
-                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16)
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0xFFFF) << 16)
             else:
                 if addr_d != addr_a:
                     # Non-destructive: bit-24=1, addr_d from R6 (pre-loaded via LDI R6, val)
-                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16) | (1 << 24)
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0xFFFF) << 16) | (1 << 24)
                 else:
                     # Destructive: addr_d = addr_a
-                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16)
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0xFFFF) << 16)
 
         else:
             if ops:

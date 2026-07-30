@@ -10,6 +10,8 @@ module scalar_ctrl (
   input  logic        reg_we,
   input  logic [15:0] reg_wdata,
   output logic [15:0] reg_rs, reg_rt, reg_rd,
+  output logic [15:0] reg_r6,           // R6 (used as D_ADDR for vector non-destructive)
+  output logic [15:0] alu_result,
 
   // Comparison output (for branch)
   output logic        cmp_eq, cmp_lt, cmp_gt,
@@ -39,6 +41,7 @@ module scalar_ctrl (
   assign reg_rs = regfile[rs_addr];
   assign reg_rt = regfile[rt_addr];
   assign reg_rd = regfile[rd_addr];
+  assign reg_r6 = regfile[6];
 
   // --- Loop counter ---
   logic [15:0] lc;
@@ -55,8 +58,6 @@ module scalar_ctrl (
   assign lc_zero = (lc == 16'd0);
 
   // --- ALU ---
-  logic [15:0] alu_result;
-
   always_comb begin
     unique case (opcode)
       3'd0: alu_result = a + b;

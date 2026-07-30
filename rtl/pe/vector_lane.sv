@@ -12,6 +12,7 @@ module vector_lane (
 
   // Result
   output vector_line_t result,
+  output vector_line_t mac_acc_out,  // for VMAC writeback
 
   // Clock & reset
   input  logic clk_pe,
@@ -20,6 +21,8 @@ module vector_lane (
 
   // --- FP8 MAC array ---
   fp8_e4m3_t mac_acc [VECTOR_LANE_WIDTH-1:0];
+
+  assign mac_acc_out = mac_acc;
 
   always_ff @(posedge clk_pe or negedge rst_n) begin
     for (int i = 0; i < VECTOR_LANE_WIDTH; i++) begin

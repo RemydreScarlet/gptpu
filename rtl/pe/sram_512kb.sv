@@ -26,6 +26,11 @@ module sram_512kb (
   input  logic rst_n
 );
 
+  // --- Line address conversion (byte addr >> 6 = line addr) ---
+  function automatic [15:0] line_addr(input [15:0] byte_addr);
+    return byte_addr[15:6];
+  endfunction
+
   // --- 4 banks of single-port SRAM ---
   // Bank 0: 256 KB = 4096 lines x 512 bits
   logic [511:0] mem0 [4095:0];
@@ -42,8 +47,8 @@ module sram_512kb (
   // --- Bank 0 ---
   always_ff @(posedge clk_pe) begin
     if (cs0) begin
-      if (we0) mem0[addr0] <= data0;
-      else     data0 <= mem0[addr0];
+      if (we0) mem0[line_addr(addr0)] <= data0;
+      else     data0 <= mem0[line_addr(addr0)];
     end else begin
       data0 <= 'Z;
     end
@@ -52,8 +57,8 @@ module sram_512kb (
   // --- Bank 1 ---
   always_ff @(posedge clk_pe) begin
     if (cs1) begin
-      if (we1) mem1[addr1] <= data1;
-      else     data1 <= mem1[addr1];
+      if (we1) mem1[line_addr(addr1)] <= data1;
+      else     data1 <= mem1[line_addr(addr1)];
     end else begin
       data1 <= 'Z;
     end
@@ -62,8 +67,8 @@ module sram_512kb (
   // --- Bank 2 ---
   always_ff @(posedge clk_pe) begin
     if (cs2) begin
-      if (we2) mem2[addr2] <= data2;
-      else     data2 <= mem2[addr2];
+      if (we2) mem2[line_addr(addr2)] <= data2;
+      else     data2 <= mem2[line_addr(addr2)];
     end else begin
       data2 <= 'Z;
     end
@@ -72,8 +77,8 @@ module sram_512kb (
   // --- Bank 3 ---
   always_ff @(posedge clk_pe) begin
     if (cs3) begin
-      if (we3) mem3[addr3] <= data3;
-      else     data3 <= mem3[addr3];
+      if (we3) mem3[line_addr(addr3)] <= data3;
+      else     data3 <= mem3[line_addr(addr3)];
     end else begin
       data3 <= 'Z;
     end
