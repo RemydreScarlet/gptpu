@@ -72,12 +72,22 @@ def fp8_add(a: int, b: int) -> int:
 
     if sign_a == sign_b:
         mant_r = mant_a_ext + mant_b_ext
+        if mant_r & 0x10:
+            mant_r >>= 1
+            exp_r += 1
     else:
-        mant_r = mant_a_ext - mant_b_ext
+        if mant_a_ext < mant_b_ext:
+            mant_r = mant_b_ext - mant_a_ext
+            sign_r = 1 - sign_r
+        else:
+            mant_r = mant_a_ext - mant_b_ext
+        # Renormalize: shift left until hidden bit (bit 3) is set
+        while mant_r > 0 and not (mant_r & 0x8):
+            mant_r <<= 1
+            exp_r -= 1
+            if exp_r <= 0:
+                return 0
 
-    if mant_r & 0x10:
-        mant_r >>= 1
-        exp_r += 1
     if exp_r >= 0xF:
         return (sign_r << 7) | 0xF8
     if mant_r == 0:
@@ -280,7 +290,7 @@ class Emulator:
             addr_d = imm & 0xFFFF
             line_a = pe.read_sram_line(0, addr_a)
             line_b = pe.read_sram_line(1, addr_b)
-            result = [fp8_add(line_a[i], fp8_mul(line_b[i], 0xBF)) for i in range(VECTOR_LANE_WIDTH)]
+            result = [fp8_add(line_a[i], fp8_mul(line_b[i], 0xB8)) for i in range(VECTOR_LANE_WIDTH)]
             pe.write_sram_line(2, addr_d, result)
 
         elif opcode == OPCODES['VMUL']:

@@ -86,9 +86,16 @@ class Assembler:
 
         if mnemonic in ('JMP', 'JAL', 'BNE', 'BEQ', 'BLT', 'BGT', 'DJNZ'):
             target = ops[0] if ops else ''
-            val = parse_val(target, self.labels, self.equ) if target else 0
+            raw = parse_val(target, self.labels, self.equ) if target else 0
             if target in self.labels:
-                val = self.labels[target] - (self.org + 4)
+                if mnemonic in ('JMP', 'JAL'):
+                    # Absolute instruction address (org is byte, labels is byte)
+                    val = self.labels[target] // 4
+                else:
+                    # Relative instruction offset
+                    val = (self.labels[target] - (self.org + 4)) // 4
+            else:
+                val = raw
             imm = val & 0x1FFFFFF
 
         elif mnemonic == 'LDI':
@@ -162,14 +169,21 @@ class Assembler:
 
         for i, line in enumerate(lines):
             stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
             if stripped.endswith(':') and not stripped.startswith('.'):
                 label = stripped[:-1].strip()
                 self.labels[label] = self.org
                 continue
-            if stripped.startswith('.org'):
-                parts = stripped.split(None, 1)
-                if len(parts) > 1:
-                    self.org = parse_val(parts[1].strip(), self.labels, self.equ)
+            if stripped.startswith('.'):
+                if stripped.startswith('.org'):
+                    parts = stripped.split(None, 1)
+                    if len(parts) > 1:
+                        self.org = parse_val(parts[1].strip(), self.labels, self.equ)
+                # .equ doesn't advance org
+                continue
+            # Instruction line: advance byte offset by 4 (fixed-length ISA)
+            self.org += 4
 
         self.org = 0
         self.output = bytearray()
