@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Verilog simulation
+*.vcd
+*.vpd
+*.fsdb
+work/
+transcript
+*.log
+*.wlft
+*.mem
+
+# EDA tool workspaces
+xst/
+_XMSGS/
+.Xil/
+INCA_libs/
+csrc/
+simv*
+*.daidir
+*.vdb
+
+# Synthesis artifacts
+*.ngc
+*.lso
+*.jou
+*.str
+*.rpt
+*.vg
+*.sdf
