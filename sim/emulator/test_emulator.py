@@ -115,16 +115,36 @@ def test_fp8_arithmetic():
     test("fp8_add(max, max) = Inf/NaN", (v & 0x78) == 0x78,
          f"got {v:02x}, expected overflow")
 
-    # Negative addition (BUG: normalization missing after subtraction)
+    # Negative addition: -2 + 1 = -1
     fp8_neg_two = 0xC0  # -2.0: sign=1, exp=8, mant=0
     r_add_neg = fp8_add(fp8_neg_two, fp8_one)
-    test("fp8_add(-2, 1) SHOULD be -1 (BUG: got -3 due to missing renormalization)",
-         r_add_neg == fp8_neg_one, f"got 0x{r_add_neg:02x} = {fp8_to_float(r_add_neg):.1f} (expected -1.0)")
+    test("fp8_add(-2, 1) = -1",
+         r_add_neg == fp8_neg_one, f"got 0x{r_add_neg:02x} = {fp8_to_float(r_add_neg):.1f}")
 
-    # Subtraction via different signs (same BUG)
+    # Subtraction via different signs: 2 + (-1) = 1
     r_sub = fp8_add(fp8_two, fp8_neg_one)
-    test("fp8_add(2, -1) SHOULD be 1 (BUG: got 3 due to missing renormalization)",
-         r_sub == fp8_one, f"got 0x{r_sub:02x} = {fp8_to_float(r_sub):.1f} (expected 1.0)")
+    test("fp8_add(2, -1) = 1",
+         r_sub == fp8_one, f"got 0x{r_sub:02x} = {fp8_to_float(r_sub):.1f}")
+
+    # Edge cases: different exponents, different signs
+    fp8_half = 0x30      # 0.5: sign=0, exp=6, mant=0
+    fp8_neg_four = 0xC8  # -4.0: sign=1, exp=9, mant=0
+    fp8_neg_three = 0xC4 # -3.0
+    fp8_three_quarter = 0x34  # 0.75: sign=0, exp=6, mant=4 -> 1.5*2^-1=0.75
+    fp8_one_half = 0x38  # -1.5: sign=1, exp=7, mant=4 -> -(1.5)*1=-1.5
+    fp8_neg_one_half = 0xBC  # -1.5
+    r_small_large = fp8_add(fp8_half, fp8_neg_two)
+    test("fp8_add(0.5, -2) = -1.5",
+         r_small_large == fp8_neg_one_half,
+         f"got 0x{r_small_large:02x} = {fp8_to_float(r_small_large):.1f}")
+    r_pos_neg_large = fp8_add(fp8_one, fp8_neg_four)
+    test("fp8_add(1, -4) = -3",
+         r_pos_neg_large == fp8_neg_three,
+         f"got 0x{r_pos_neg_large:02x} = {fp8_to_float(r_pos_neg_large):.1f}")
+    r_small_pos_neg = fp8_add(fp8_three_quarter, fp8_neg_two)
+    test("fp8_add(0.75, -2) = -1.25",
+         r_small_pos_neg == 0xBA,
+         f"got 0x{r_small_pos_neg:02x} = {fp8_to_float(r_small_pos_neg):.1f}")
 
 
 # ============================================================
@@ -621,7 +641,7 @@ def test_bcast_routing():
     test("BCAST_COL: includes NORTH", NoCRouter.PORT_N in dirs2)
 
     hops3 = NoCRouter.route(4, 4, 0, 0, bcast_mode=3)  # BCAST_ALL
-    test("BCAST_ALL: 7 directions", len(hops3) == 7,
+    test("BCAST_ALL: 8 directions", len(hops3) == 8,
          f"got {len(hops3)}")
 
 
@@ -781,11 +801,119 @@ def test_vmin_vmax():
         pe0.sram[0][i * 8] = 0x38
         pe0.sram[1][i * 8] = 0x40
 
-    # VMIN and VMAX not implemented in emulator! Let me verify...
-    # Looking at the emulator code: VMIN and VMAX are in OPCODES dict but
-    # NOT in the step_pe dispatch. This means they'll fall through to NOP.
-    test("VMIN opcode defined", OPCODES['VMIN'] == 0x05)
-    test("VMAX opcode defined", OPCODES['VMAX'] == 0x06)
+    # VMIN: min(1.0, 2.0) = 1.0
+    code = make_padded_sn([
+        make_instr(OPCODES['VMIN'], 0),  # addr_a=0, addr_b=0, addr_d=0
+        make_instr(OPCODES['HALT']),
+    ])
+    emu.load_microcode(0, code)
+    emu.run(100)
+    line = pe0.read_sram_line(2, 0)
+    test("VMIN: min(1.0, 2.0) = 1.0 (0x38)",
+         all(v == 0x38 for v in line), f"got {[f'{v:02x}' for v in line[:3]]}...")
+
+    emu2 = Emulator()
+    pe0_2 = emu2.pes[0]
+    for i in range(8):
+        pe0_2.sram[0][i * 8] = 0x40  # 2.0
+        pe0_2.sram[1][i * 8] = 0x38  # 1.0
+
+    code2 = make_padded_sn([
+        make_instr(OPCODES['VMAX'], 0),
+        make_instr(OPCODES['HALT']),
+    ])
+    emu2.load_microcode(0, code2)
+    emu2.run(100)
+    line2 = pe0_2.read_sram_line(2, 0)
+    test("VMAX: max(2.0, 1.0) = 2.0 (0x40)",
+         all(v == 0x40 for v in line2), f"got {[f'{v:02x}' for v in line2[:3]]}...")
+
+
+def test_test_instruction():
+    print("\n--- TEST Instruction ---")
+    emu = Emulator()
+    pe0 = emu.pes[0]
+    # SCMP R1,R2 sets status. Then TEST R3 stores status in R3.
+    code = make_padded_sn([
+        make_instr(OPCODES['LDI'], (1 << 20) | 5),
+        make_instr(OPCODES['LDI'], (2 << 20) | 3),
+        make_instr(OPCODES['SCMP'], 1 | (2 << 3)),   # status=1 (5>3)
+        make_instr(OPCODES['TEST'], (3 << 16)),       # R3 = status
+        make_instr(OPCODES['HALT']),
+    ])
+    emu.load_microcode(0, code)
+    emu.run(100)
+    test("TEST: R3 = status (5>3 -> 1)", pe0.regfile[3] == 1,
+         f"got R3={pe0.regfile[3]}")
+
+
+def test_backward_branch():
+    print("\n--- Backward Branch (signed offset) ---")
+    emu = Emulator()
+    pe0 = emu.pes[0]
+    pe0.lc = 3
+    # Simple loop: DJNZ from PC=2 back to PC=0
+    # DJNZ encoding: offset = imm & 0x1FFF, sign-extended
+    # offset -2 (back 2): 0x1FFE in 13-bit signed
+    code = make_padded_sn([
+        make_instr(OPCODES['NOP']),           # PC=0: loop body
+        make_instr(OPCODES['NOP']),           # PC=1: loop body
+        make_instr(OPCODES['DJNZ'], 0x1FFD),  # PC=2: LC--, jump to PC+1+(-3)=0
+        make_instr(OPCODES['HALT']),          # PC=3: should reach when LC=0
+    ])
+    emu.load_microcode(0, code)
+    emu.run(100)
+    test("Backward DJNZ: final PC at HALT(3)", pe0.pc == 3,
+         f"got PC={pe0.pc}")
+    test("Backward DJNZ: LC=0", pe0.lc == 0, f"got LC={pe0.lc}")
+
+
+def test_streamv_streams():
+    print("\n--- STREAMV / STREAMS ---")
+    emu = Emulator()
+    pe0 = emu.pes[0]
+
+    # Load DDR with known data, then STREAMV to SRAM
+    emu.load_ddr(bytes(range(256)), 0)
+
+    # STREAMV: DDR line 0 -> SRAM Bank2[0x100]
+    code = make_padded_sn([
+        make_instr(OPCODES['STREAMV'], (0 << 16) | 0x100),  # ddr_line=0, sram_addr=0x100
+        make_instr(OPCODES['HALT']),
+    ])
+    emu.load_microcode(0, code)
+    emu.run(100)
+
+    raw = pe0.sram[2][0x100:0x140]
+    test("STREAMV: Bank2[0x100..0x13F] = DDR[0..63]",
+         raw == bytes(range(64)), f"got first={raw[0]}, last={raw[63]}")
+    # Also check broadcast: all PEs in SN0 got the same data
+    pe16 = emu.pes[16]
+    raw16 = pe16.sram[2][0x100:0x140]
+    test("STREAMV broadcast: PE16 also got data",
+         raw16[:8] == bytes(range(8)), f"got first={raw16[0]}")
+
+    # STREAMS: SRAM Bank2[0x200] -> DDR line 10
+    pe0.write_sram_line(2, 0x200, [0xA0 + i for i in range(8)])
+    code2 = make_padded_sn([
+        make_instr(OPCODES['STREAMS'], (10 << 16) | 0x200),
+        make_instr(OPCODES['HALT']),
+    ])
+    emu2 = Emulator()
+    pe0_2 = emu2.pes[0]
+    pe0_2.write_sram_line(2, 0x200, [0xA0 + i for i in range(8)])
+    emu2.load_microcode(0, code2)
+    emu2.run(100)
+    test("STREAMS (PE0): DDR line 10[0]=0xA0",
+         emu2.ddr_memory[10 * 64] == 0xA0,
+         f"got {emu2.ddr_memory[10 * 64]:02x}")
+    # write_sram_line puts each lane at 8-byte offset, so 8th lane at 0x238
+    test("STREAMS (PE0): DDR line 10[0x38]=0xA7 (8th lane)",
+         emu2.ddr_memory[10 * 64 + 0x38] == 0xA7,
+         f"got {emu2.ddr_memory[10 * 64 + 0x38]:02x}")
+    test("STREAMS (PE0): DDR line 10[63]=0x00 (zero pad)",
+         emu2.ddr_memory[10 * 64 + 63] == 0x00,
+         f"got {emu2.ddr_memory[10 * 64 + 63]:02x}")
 
 
 def test_load_microcode_from_file():
@@ -837,8 +965,10 @@ def main():
     test_bcast_routing()
     test_sram_banks()
     test_pe_independence()
-    test_streaming_stubs()
     test_vmin_vmax()
+    test_test_instruction()
+    test_backward_branch()
+    test_streamv_streams()
     test_recv_stall()
     test_load_microcode_from_file()
 

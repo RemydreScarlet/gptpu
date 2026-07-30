@@ -31,6 +31,17 @@ def is_reg(name: str) -> bool:
 
 def parse_val(s: str, labels: dict, equ: dict) -> int:
     s = s.strip()
+    # Handle arithmetic expressions (e.g., W_ADDR+8, X_ADDR-4)
+    for op in ('+', '-'):
+        if op in s and not s.startswith('0x') and not s.startswith('0X'):
+            idx = s.rfind(op)
+            # Only split if op is not the first char
+            if idx > 0:
+                lhs = s[:idx].strip()
+                rhs = s[idx+1:].strip()
+                lhs_val = parse_val(lhs, labels, equ)
+                rhs_val = parse_val(rhs, labels, equ)
+                return lhs_val + rhs_val if op == '+' else lhs_val - rhs_val
     if is_reg(s):
         reg = int(s[1:])
         reg_type = s[0]
@@ -85,7 +96,13 @@ class Assembler:
         imm = 0
 
         if mnemonic in ('JMP', 'JAL', 'BNE', 'BEQ', 'BLT', 'BGT', 'DJNZ'):
-            target = ops[0] if ops else ''
+            if mnemonic == 'DJNZ' and len(ops) >= 2:
+                # DJNZ Rn, label: first operand is register, second is label
+                rd = parse_val(ops[0], self.labels, self.equ)
+                target = ops[1]
+            else:
+                rd = 0
+                target = ops[0] if ops else ''
             raw = parse_val(target, self.labels, self.equ) if target else 0
             if target in self.labels:
                 if mnemonic in ('JMP', 'JAL'):
@@ -96,7 +113,7 @@ class Assembler:
                     val = (self.labels[target] - (self.org + 4)) // 4
             else:
                 val = raw
-            imm = val & 0x1FFFFFF
+            imm = ((rd & 0xF) << 20) | (val & 0xFFFFF)
 
         elif mnemonic == 'LDI':
             rd = parse_val(ops[0], self.labels, self.equ) if len(ops) > 0 else 0
@@ -125,9 +142,14 @@ class Assembler:
             table = parse_val(ops[1], self.labels, self.equ) if len(ops) > 1 else 0
             imm = (entry & 0xFF) | ((table & 0xF) << 8)
 
+        elif mnemonic == 'TEST':
+            rd = parse_val(ops[0], self.labels, self.equ) if len(ops) > 0 else 0
+            imm = ((rd & 0x7) << 16)
+
         elif mnemonic in ('STREAMV', 'STREAMS'):
-            val = parse_val(ops[0], self.labels, self.equ) if ops else 0
-            imm = val & 0x1FFFFFF
+            ddr_line = parse_val(ops[0], self.labels, self.equ) if len(ops) > 0 else 0
+            sram_addr = parse_val(ops[1], self.labels, self.equ) if len(ops) > 1 else 0
+            imm = ((ddr_line & 0xFFFF) << 16) | (sram_addr & 0xFFFF)
 
         elif mnemonic in ('SADD', 'SSUB', 'SAND', 'SOR', 'SXOR', 'SSHL', 'SSHR'):
             rd = parse_val(ops[0], self.labels, self.equ) if len(ops) > 0 else 0
@@ -145,10 +167,21 @@ class Assembler:
         elif mnemonic in ('VMAC', 'VADD', 'VSUB', 'VMUL', 'VMIN', 'VMAX'):
             addr_a = parse_val(ops[0], self.labels, self.equ) if len(ops) > 0 else 0
             addr_b = parse_val(ops[1], self.labels, self.equ) if len(ops) > 1 else 0
-            addr_d = parse_val(ops[2], self.labels, self.equ) if len(ops) > 2 else 0
-            imm = (addr_a & 0xFFFF) | ((addr_b & 0xFFFF) << 16)
-            if mnemonic != 'VMAC':
-                imm |= (addr_d & 0xFFFF) << 0
+            addr_d = parse_val(ops[2], self.labels, self.equ) if len(ops) > 2 else addr_a
+            if mnemonic == 'VMAC':
+                if len(ops) > 2 and addr_d != addr_a:
+                    # VMAC writeback: bit-24=1, addr_d in bits 0-15, addr_b in bits 16-23
+                    imm = (addr_d & 0xFFFF) | ((addr_b & 0x1FF) << 16) | (1 << 24)
+                else:
+                    # VMAC accumulate: addr_a in bits 0-15, addr_b in bits 16-23
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16)
+            else:
+                if addr_d != addr_a:
+                    # Non-destructive: bit-24=1, addr_d from R6 (pre-loaded via LDI R6, val)
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16) | (1 << 24)
+                else:
+                    # Destructive: addr_d = addr_a
+                    imm = (addr_a & 0xFFFF) | ((addr_b & 0x1FF) << 16)
 
         else:
             if ops:
@@ -188,6 +221,10 @@ class Assembler:
         self.org = 0
         self.output = bytearray()
         for i, line in enumerate(lines):
+            # Strip inline comments
+            comment_pos = line.find('#')
+            if comment_pos >= 0:
+                line = line[:comment_pos]
             self.assemble_line(line, i)
 
         return bytes(self.output)

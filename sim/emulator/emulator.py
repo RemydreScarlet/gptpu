@@ -72,16 +72,17 @@ def fp8_add(a: int, b: int) -> int:
 
     if sign_a == sign_b:
         mant_r = mant_a_ext + mant_b_ext
+        sign_r = sign_a
         if mant_r & 0x10:
             mant_r >>= 1
             exp_r += 1
     else:
-        if mant_a_ext < mant_b_ext:
-            mant_r = mant_b_ext - mant_a_ext
-            sign_r = 1 - sign_r
-        else:
+        if mant_a_ext >= mant_b_ext:
             mant_r = mant_a_ext - mant_b_ext
-        # Renormalize: shift left until hidden bit (bit 3) is set
+            sign_r = sign_a
+        else:
+            mant_r = mant_b_ext - mant_a_ext
+            sign_r = sign_b
         while mant_r > 0 and not (mant_r & 0x8):
             mant_r <<= 1
             exp_r -= 1
@@ -184,6 +185,7 @@ class NoCRouter:
     PORT_NE = 5
     PORT_SE = 6
     PORT_NW = 7
+    PORT_SW = 8
 
     @staticmethod
     def route(src_x, src_y, dst_x, dst_y, bcast_mode=0):
@@ -194,11 +196,11 @@ class NoCRouter:
         if bcast_mode == 2:  # BCAST_COL
             return [(src_x, src_y + 1, NoCRouter.PORT_S),
                     (src_x, src_y - 1, NoCRouter.PORT_N)]
-        if bcast_mode == 3:  # BCAST_ALL
+        if bcast_mode == 3:  # BCAST_ALL (8 Moore neighbors)
             dirs = [(1, 0, NoCRouter.PORT_E), (-1, 0, NoCRouter.PORT_W),
                     (0, 1, NoCRouter.PORT_S), (0, -1, NoCRouter.PORT_N),
                     (1, -1, NoCRouter.PORT_NE), (1, 1, NoCRouter.PORT_SE),
-                    (-1, -1, NoCRouter.PORT_NW)]
+                    (-1, -1, NoCRouter.PORT_NW), (-1, 1, NoCRouter.PORT_SW)]
             return [(src_x + dx, src_y + dy, d) for dx, dy, d in dirs]
 
         # Dimension-order: X first, Y second
@@ -215,13 +217,15 @@ class NoCRouter:
 
 # === Cycle-Accurate Emulator ===
 class Emulator:
-    def __init__(self):
+    def __init__(self, ddr_latency: int = 10):
         self.cycle = 0
         self.pes = []
-        self.noc_packets = []  # (src, dst, data, delay)
+        self.noc_packets = []  # (curr_x, curr_y, dst_x, dst_y, data, mode)
         self.microcode = [bytearray(8192) for _ in range(NUM_PE // 16 + 1)]
         self.trace = False
         self.running = True
+        self.ddr_latency = ddr_latency  # cycles for DDR→SRAM / SRAM→DDR
+        self.stream_queue = []  # (ddr_line, sram_addr, sn_x, sn_y, direction, remaining)
 
         for pid in range(NUM_PE):
             px = pid % PE_GRID_X
@@ -236,6 +240,16 @@ class Emulator:
         with open(path, 'rb') as f:
             self.load_microcode(sn_id, f.read())
 
+    def load_ddr(self, data: bytes, offset: int = 0):
+        if not hasattr(self, 'ddr_memory'):
+            self.ddr_memory = bytearray(1024 * 1024)
+        end = min(offset + len(data), len(self.ddr_memory))
+        self.ddr_memory[offset:end] = data[:end - offset]
+
+    def load_ddr_from_file(self, path: str, offset: int = 0):
+        with open(path, 'rb') as f:
+            self.load_ddr(f.read(), offset)
+
     def load_sram(self, pe_id: int, bank: int, addr: int, data: bytes):
         pe = self.pes[pe_id]
         ba = addr % len(pe.sram[bank])
@@ -244,7 +258,9 @@ class Emulator:
     def read_instruction(self, pe: PEState) -> int:
         sn_id = (pe.pe_y // 4) * (PE_GRID_X // 4) + (pe.pe_x // 4)
         sn_mem = self.microcode[sn_id] if sn_id < len(self.microcode) else bytearray(8192)
-        offset = (pe.pe_id % 16) * 512 + pe.pc * 4
+        # PE position within the 4x4 SN block determines its 512-byte microcode slot
+        slot = (pe.pe_x % 4) + (pe.pe_y % 4) * 4
+        offset = slot * 512 + pe.pc * 4
         if offset + 4 > len(sn_mem):
             return (OPCODES['NOP'] << 25)
         word = struct.unpack_from('<I', sn_mem, offset)[0]
@@ -267,39 +283,42 @@ class Emulator:
             pass
 
         elif opcode == OPCODES['VMAC']:
-            addr_a = imm & 0xFFFF
-            addr_b = (imm >> 16) & 0xFFFF
-            line_a = pe.read_sram_line(0, addr_a)
-            line_b = pe.read_sram_line(1, addr_b)
-            for i in range(VECTOR_LANE_WIDTH):
-                product = fp8_mul(line_a[i], line_b[i])
-                pe.acc[i] = fp8_add(pe.acc[i], product)
+            writeback = (imm >> 24) & 1
+            if writeback:
+                addr_d = imm & 0xFFFF
+                pe.write_sram_line(2, addr_d, pe.acc)
+            else:
+                addr_a = imm & 0xFFFF
+                addr_b = (imm >> 16) & 0xFFFF
+                line_a = pe.read_sram_line(0, addr_a)
+                line_b = pe.read_sram_line(1, addr_b)
+                for i in range(VECTOR_LANE_WIDTH):
+                    product = fp8_mul(line_a[i], line_b[i])
+                    pe.acc[i] = fp8_add(pe.acc[i], product)
 
-        elif opcode == OPCODES['VADD']:
+        elif opcode in (OPCODES['VADD'], OPCODES['VSUB'], OPCODES['VMUL'],
+                        OPCODES['VMIN'], OPCODES['VMAX']):
             addr_a = imm & 0xFFFF
             addr_b = (imm >> 16) & 0xFFFF
-            addr_d = imm & 0xFFFF
+            if (imm >> 24) & 1:
+                addr_d = pe.regfile[6]  # D_ADDR register, pre-loaded via LDI
+            else:
+                addr_d = addr_a  # destructive mode
             line_a = pe.read_sram_line(0, addr_a)
             line_b = pe.read_sram_line(1, addr_b)
-            result = [fp8_add(line_a[i], line_b[i]) for i in range(VECTOR_LANE_WIDTH)]
-            pe.write_sram_line(2, addr_d, result)
-
-        elif opcode == OPCODES['VSUB']:
-            addr_a = imm & 0xFFFF
-            addr_b = (imm >> 16) & 0xFFFF
-            addr_d = imm & 0xFFFF
-            line_a = pe.read_sram_line(0, addr_a)
-            line_b = pe.read_sram_line(1, addr_b)
-            result = [fp8_add(line_a[i], fp8_mul(line_b[i], 0xB8)) for i in range(VECTOR_LANE_WIDTH)]
-            pe.write_sram_line(2, addr_d, result)
-
-        elif opcode == OPCODES['VMUL']:
-            addr_a = imm & 0xFFFF
-            addr_b = (imm >> 16) & 0xFFFF
-            addr_d = imm & 0xFFFF
-            line_a = pe.read_sram_line(0, addr_a)
-            line_b = pe.read_sram_line(1, addr_b)
-            result = [fp8_mul(line_a[i], line_b[i]) for i in range(VECTOR_LANE_WIDTH)]
+            if opcode == OPCODES['VADD']:
+                result = [fp8_add(line_a[i], line_b[i]) for i in range(VECTOR_LANE_WIDTH)]
+            elif opcode == OPCODES['VSUB']:
+                result = [fp8_add(line_a[i], fp8_mul(line_b[i], 0xB8))
+                          for i in range(VECTOR_LANE_WIDTH)]
+            elif opcode == OPCODES['VMUL']:
+                result = [fp8_mul(line_a[i], line_b[i]) for i in range(VECTOR_LANE_WIDTH)]
+            elif opcode == OPCODES['VMIN']:
+                result = [line_a[i] if line_a[i] < line_b[i] else line_b[i]
+                          for i in range(VECTOR_LANE_WIDTH)]
+            elif opcode == OPCODES['VMAX']:
+                result = [line_a[i] if line_a[i] > line_b[i] else line_b[i]
+                          for i in range(VECTOR_LANE_WIDTH)]
             pe.write_sram_line(2, addr_d, result)
 
         elif opcode == OPCODES['LUT']:
@@ -318,11 +337,10 @@ class Emulator:
             payload = pe.regfile[src_reg] & 0xFFFFFFFFFF
             flit_data = (pe.pe_y << 56) | (pe.pe_x << 48) | payload
             self.noc_packets.append((
-                (pe.pe_x, pe.pe_y),
-                (dst_x, dst_y),
+                pe.pe_x, pe.pe_y,
+                dst_x, dst_y,
                 flit_data,
-                0,  # bcast_mode = unicast
-                1   # delay
+                0  # bcast_mode = unicast
             ))
 
         elif opcode == OPCODES['BCAST']:
@@ -333,11 +351,10 @@ class Emulator:
             payload = pe.regfile[src_reg] & 0xFFFFFFFFFF
             flit_data = (pe.pe_y << 56) | (pe.pe_x << 48) | (bcast_mode << 45) | payload
             self.noc_packets.append((
-                (pe.pe_x, pe.pe_y),
-                (dst_x, dst_y),
+                pe.pe_x, pe.pe_y,
+                dst_x, dst_y,
                 flit_data,
-                bcast_mode,
-                1  # delay
+                bcast_mode
             ))
 
         elif opcode == OPCODES['RECV']:
@@ -368,13 +385,26 @@ class Emulator:
                 OPCODES['BLT']: lambda: pe.status < 0,
                 OPCODES['BGT']: lambda: pe.status > 0,
             }
+            offset = imm & 0x1FFF
+            if offset >= 0x1000:
+                offset -= 0x2000  # sign-extend 13-bit
             if cond_map[opcode]():
-                pc_next = pe.pc + 1 + (imm & 0x1FFF)
+                pc_next = pe.pc + 1 + offset
 
         elif opcode == OPCODES['DJNZ']:
-            pe.lc -= 1
-            if pe.lc != 0:
-                pc_next = pe.pc + 1 + (imm & 0x1FFF)
+            rd = (imm >> 20) & 0xF
+            if rd == 0:
+                # rd=0: use internal loop counter (backward compat with direct tests)
+                pe.lc -= 1
+                lc_val = pe.lc
+            else:
+                pe.regfile[rd] = (pe.regfile[rd] - 1) & 0xFFFF
+                lc_val = pe.regfile[rd]
+            offset = imm & 0x1FFF
+            if offset >= 0x1000:
+                offset -= 0x2000  # sign-extend 13-bit
+            if lc_val != 0:
+                pc_next = pe.pc + 1 + offset
 
         elif opcode == OPCODES['LDI']:
             rd = (imm >> 20) & 0x7
@@ -431,6 +461,38 @@ class Emulator:
             pe.active = False
             pc_next = pe.pc
 
+        elif opcode == OPCODES['TEST']:
+            rd = (imm >> 16) & 0x7
+            if rd < 8:
+                pe.regfile[rd] = pe.status & 0xFFFF
+
+        elif opcode == OPCODES['STREAMV']:
+            ddr_line = (imm >> 16) & 0xFFFF
+            sram_addr = imm & 0xFFFF
+            if not hasattr(self, 'ddr_memory'):
+                self.ddr_memory = bytearray(1024 * 1024)
+            # Only top-left PE of the 4x4 SN block initiates the transfer
+            sn_origin = (pe.pe_y // 4) * PE_GRID_X * 4 + (pe.pe_x // 4) * 4
+            if pe.pe_id == sn_origin:
+                sn_x = (pe.pe_x // 4) * 4
+                sn_y = (pe.pe_y // 4) * 4
+                self.stream_queue.append(
+                    (ddr_line, sram_addr, sn_x, sn_y, 0, self.ddr_latency)
+                )
+
+        elif opcode == OPCODES['STREAMS']:
+            ddr_line = (imm >> 16) & 0xFFFF
+            sram_addr = imm & 0xFFFF
+            if not hasattr(self, 'ddr_memory'):
+                self.ddr_memory = bytearray(1024 * 1024)
+            sn_origin = (pe.pe_y // 4) * PE_GRID_X * 4 + (pe.pe_x // 4) * 4
+            if pe.pe_id == sn_origin:
+                sn_x = (pe.pe_x // 4) * 4
+                sn_y = (pe.pe_y // 4) * 4
+                self.stream_queue.append(
+                    (ddr_line, sram_addr, sn_x, sn_y, 1, self.ddr_latency)
+                )
+
         elif opcode == OPCODES['SYNC']:
             pass
 
@@ -440,42 +502,81 @@ class Emulator:
         pe.pc = pc_next & 0x1FFF
 
     def route_packets(self):
-        """Process NoC packets in-flight."""
-        delivered = []
+        """Advance unicast one hop per cycle; deliver broadcast to neighbors."""
         remaining = []
-        for src, dst, data, mode, delay in self.noc_packets:
-            if delay > 0:
-                remaining.append((src, dst, data, mode, delay - 1))
-            else:
-                # Route to next hop
-                hops = NoCRouter.route(src[0], src[1], dst[0], dst[1], mode)
-                for nx, ny, d in hops:
+        for curr_x, curr_y, dst_x, dst_y, data, mode in self.noc_packets:
+            if mode == 0:
+                hops = NoCRouter.route(curr_x, curr_y, dst_x, dst_y, 0)
+                nx, ny, _ = hops[0]
+                if nx == dst_x and ny == dst_y:
                     if 0 <= nx < PE_GRID_X and 0 <= ny < PE_GRID_Y:
-                        target_pe = self.pes[ny * PE_GRID_X + nx]
-                        target_pe.inbox.append(data)
-                delivered.append((src, dst, data, mode, delay))
+                        self.pes[ny * PE_GRID_X + nx].inbox.append(data)
+                else:
+                    if 0 <= nx < PE_GRID_X and 0 <= ny < PE_GRID_Y:
+                        remaining.append((nx, ny, dst_x, dst_y, data, mode))
+            else:
+                hops = NoCRouter.route(curr_x, curr_y, dst_x, dst_y, mode)
+                for nx, ny, _ in hops:
+                    if 0 <= nx < PE_GRID_X and 0 <= ny < PE_GRID_Y:
+                        self.pes[ny * PE_GRID_X + nx].inbox.append(data)
         self.noc_packets = remaining
+
+    def process_stream_queue(self):
+        """Advance pending DDR transfers; complete when remaining hits 0."""
+        completed = []
+        remaining = []
+        for ddr_line, sram_addr, sn_x, sn_y, direction, rem in self.stream_queue:
+            if rem > 0:
+                remaining.append((ddr_line, sram_addr, sn_x, sn_y, direction, rem - 1))
+            else:
+                completed.append((ddr_line, sram_addr, sn_x, sn_y, direction))
+        self.stream_queue = remaining
+        for ddr_line, sram_addr, sn_x, sn_y, direction in completed:
+            ddr_base = ddr_line * 64
+            if direction == 0:  # STREAMV: DDR → SRAM (all PEs in SN block)
+                for dy in range(4):
+                    for dx in range(4):
+                        target_id = (sn_y + dy) * PE_GRID_X + (sn_x + dx)
+                        if 0 <= target_id < len(self.pes):
+                            target_pe = self.pes[target_id]
+                            for i in range(64):
+                                ba = (sram_addr + i) % SRAM_BANK_SIZE[2]
+                                da = ddr_base + i
+                                if da < len(self.ddr_memory):
+                                    target_pe.sram[2][ba] = self.ddr_memory[da]
+                                else:
+                                    target_pe.sram[2][ba] = 0
+            else:  # STREAMS: SRAM → DDR (only from top-left PE in SN)
+                origin_id = sn_y * PE_GRID_X + sn_x
+                if 0 <= origin_id < len(self.pes):
+                    src_pe = self.pes[origin_id]
+                    for i in range(64):
+                        ba = (sram_addr + i) % SRAM_BANK_SIZE[2]
+                        da = ddr_base + i
+                        if da < len(self.ddr_memory):
+                            self.ddr_memory[da] = src_pe.sram[2][ba]
 
     def step(self):
         """Execute one cycle across all PEs."""
         self.cycle += 1
 
-        # Route pending NoC packets
         self.route_packets()
+        self.process_stream_queue()
 
-        # Step each PE
         for pe in self.pes:
             self.step_pe(pe)
 
         if self.trace:
             active = sum(1 for p in self.pes if p.active)
             print(f"\nCycle {self.cycle}: {active}/{NUM_PE} PEs active, "
-                  f"{len(self.noc_packets)} NoC packets in-flight")
+                  f"{len(self.noc_packets)} NoC packets in-flight, "
+                  f"{len(self.stream_queue)} DDR transfers pending")
 
     def run(self, max_cycles: int = 1000):
         while self.running and self.cycle < max_cycles:
             self.step()
-            if not any(p.active for p in self.pes):
+            if not any(p.active for p in self.pes) and not self.stream_queue \
+               and not self.noc_packets:
                 self.running = False
         return self.cycle
 

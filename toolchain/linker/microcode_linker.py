@@ -13,13 +13,18 @@ WORDS_PER_SN = MICROCODE_SIZE // WORD_SIZE
 
 
 def link(sn_id: int, words: list, base_offset: int = 0) -> bytes:
-    """Place up to 2048 words into an 8KB block for a given SN."""
-    assert len(words) <= WORDS_PER_SN, f"Too many words for SN {sn_id}: {len(words)} > {WORDS_PER_SN}"
-    padded = [0] * base_offset + words + [0] * (WORDS_PER_SN - len(words) - base_offset)
-    if len(padded) > WORDS_PER_SN:
-        raise ValueError(f"Words overflow SN {sn_id}: {len(padded)} > {WORDS_PER_SN}")
-    padded = padded + [0] * (WORDS_PER_SN - len(padded))
-    return struct.pack(f'<{WORDS_PER_SN}I', *padded[:WORDS_PER_SN])
+    """Place code into an 8KB SN block (2048 words).
+    Each PE gets 512 bytes (128 words). Code is replicated for all 16 PEs.
+    base_offset: skip N words at the start of each PE's slot.
+    """
+    WORDS_PER_PE = 128
+    assert len(words) + base_offset <= WORDS_PER_PE, \
+        f"Code too long for SN {sn_id}: {len(words)}+{base_offset} > {WORDS_PER_PE}"
+    pe_code = [0] * base_offset + words
+    pe_code = pe_code + [0] * (WORDS_PER_PE - len(pe_code))
+    full = pe_code * 16  # replicate for all 16 PEs
+    assert len(full) == WORDS_PER_SN
+    return struct.pack(f'<{WORDS_PER_SN}I', *full)
 
 
 def link_multi(sn_map: dict) -> dict:
