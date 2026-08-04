@@ -7,6 +7,8 @@ __pycache__/
 *.vcd
 *.vpd
 *.fsdb
+*.vvp
+sim/build/
 work/
 transcript
 *.log
