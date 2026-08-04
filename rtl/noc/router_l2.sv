@@ -1,32 +1,39 @@
 import gptpu_pkg::*;
 
 module router_l2 (
-  input  noc_channel_t port_in [1:0],
-  output noc_channel_t port_out[1:0],
+  // 2 links to adjacent SN-boundary highway nodes
+  input  logic [63:0] port_in_data [1:0],
+  input  logic        port_in_valid[1:0],
+  output logic        port_in_ready[1:0],
+  output logic [63:0] port_out_data [1:0],
+  output logic        port_out_valid[1:0],
+  input  logic        port_out_ready[1:0],
+
+  // Local link to the attached PE
+  input  logic [63:0] local_in_data,
+  input  logic        local_in_valid,
+  output logic        local_in_ready,
+  output logic [63:0] local_out_data,
+  output logic        local_out_valid,
+  input  logic        local_out_ready,
+
   input  logic [7:0] pe_x, pe_y,
-  input  logic [7:0] dst_x, dst_y,
-  input  noc_channel_t local_in,
-  output noc_channel_t local_out,
   input  logic clk_noc,
   input  logic rst_n
 );
 
-  // SN boundary routing: compare SN IDs
-  logic [7:0] sn_x, sn_y, dst_sn_x, dst_sn_y;
-  assign sn_x = pe_x / 4;
-  assign sn_y = pe_y / 4;
-
-  always_comb begin
-    dst_sn_x = dst_x / 4;
-    dst_sn_y = dst_y / 4;
-
-    // Port 0 = neighbor SN in X direction, Port 1 = neighbor SN in Y direction
-    for (int p = 0; p < 2; p++) begin
-      port_out[p] = port_in[p];
-      port_in[p].ready = 1'b1;
+  // SN-boundary expressway: simple cut-through pass-through per port.
+  genvar gi;
+  generate
+    for (gi = 0; gi < 2; gi++) begin : gen_pass
+      assign port_out_valid[gi] = port_in_valid[gi];
+      assign port_out_data[gi]  = port_in_data[gi];
+      assign port_in_ready[gi]  = port_out_ready[gi];
     end
-    local_out = local_in;
-    local_in.ready = 1'b1;
-  end
+  endgenerate
+
+  assign local_out_valid = local_in_valid;
+  assign local_out_data  = local_in_data;
+  assign local_in_ready  = local_out_ready;
 
 endmodule

@@ -4,34 +4,33 @@ module sram_512kb (
   // Bank 0 interface
   input  logic [15:0] addr0,
   input  logic         cs0, we0,
-  inout  wire  [511:0] data0,
+  input  logic [511:0] data0_w,
+  output logic [511:0] data0_r,
 
   // Bank 1 interface
   input  logic [15:0] addr1,
   input  logic         cs1, we1,
-  inout  wire  [511:0] data1,
+  input  logic [511:0] data1_w,
+  output logic [511:0] data1_r,
 
   // Bank 2 interface
-  input  logic [14:0] addr2,
+  input  logic [15:0] addr2,
   input  logic         cs2, we2,
-  inout  wire  [511:0] data2,
+  input  logic [511:0] data2_w,
+  output logic [511:0] data2_r,
 
   // Bank 3 interface
-  input  logic [14:0] addr3,
+  input  logic [15:0] addr3,
   input  logic         cs3, we3,
-  inout  wire  [511:0] data3,
+  input  logic [511:0] data3_w,
+  output logic [511:0] data3_r,
 
   // Local clock & reset
   input  logic clk_pe,
   input  logic rst_n
 );
 
-  // --- Line address conversion (byte addr >> 6 = line addr) ---
-  function automatic [15:0] line_addr(input [15:0] byte_addr);
-    return byte_addr[15:6];
-  endfunction
-
-  // --- 4 banks of single-port SRAM ---
+  // --- 4 banks of single-port SRAM (separate read/write data buses) ---
   // Bank 0: 256 KB = 4096 lines x 512 bits
   logic [511:0] mem0 [4095:0];
 
@@ -45,42 +44,50 @@ module sram_512kb (
   logic [511:0] mem3 [1023:0];
 
   // --- Bank 0 ---
-  always_ff @(posedge clk_pe) begin
-    if (cs0) begin
-      if (we0) mem0[line_addr(addr0)] <= data0;
-      else     data0 <= mem0[line_addr(addr0)];
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (!rst_n) begin
+      data0_r <= '0;
+    end else if (cs0) begin
+      if (we0) mem0[addr0[15:6]] <= data0_w;
+      else     data0_r <= mem0[addr0[15:6]];
     end else begin
-      data0 <= 'Z;
+      data0_r <= '0;
     end
   end
 
   // --- Bank 1 ---
-  always_ff @(posedge clk_pe) begin
-    if (cs1) begin
-      if (we1) mem1[line_addr(addr1)] <= data1;
-      else     data1 <= mem1[line_addr(addr1)];
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (!rst_n) begin
+      data1_r <= '0;
+    end else if (cs1) begin
+      if (we1) mem1[addr1[15:6]] <= data1_w;
+      else     data1_r <= mem1[addr1[15:6]];
     end else begin
-      data1 <= 'Z;
+      data1_r <= '0;
     end
   end
 
   // --- Bank 2 ---
-  always_ff @(posedge clk_pe) begin
-    if (cs2) begin
-      if (we2) mem2[line_addr(addr2)] <= data2;
-      else     data2 <= mem2[line_addr(addr2)];
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (!rst_n) begin
+      data2_r <= '0;
+    end else if (cs2) begin
+      if (we2) mem2[addr2[15:6]] <= data2_w;
+      else     data2_r <= mem2[addr2[15:6]];
     end else begin
-      data2 <= 'Z;
+      data2_r <= '0;
     end
   end
 
   // --- Bank 3 ---
-  always_ff @(posedge clk_pe) begin
-    if (cs3) begin
-      if (we3) mem3[line_addr(addr3)] <= data3;
-      else     data3 <= mem3[line_addr(addr3)];
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (!rst_n) begin
+      data3_r <= '0;
+    end else if (cs3) begin
+      if (we3) mem3[addr3[15:6]] <= data3_w;
+      else     data3_r <= mem3[addr3[15:6]];
     end else begin
-      data3 <= 'Z;
+      data3_r <= '0;
     end
   end
 

@@ -2,7 +2,7 @@ import gptpu_pkg::*;
 
 module tb_lut_swap;
 
-  logic clk_pe, rst_n;
+  logic clk_pe = 1'b0, rst_n;
 
   logic [7:0] entry_addr;
   logic [3:0] table_id;

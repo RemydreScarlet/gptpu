@@ -1,8 +1,15 @@
 import gptpu_pkg::*;
 
 module router_l0 (
-  input  noc_channel_t port_in [7:0],
-  output noc_channel_t port_out[7:0],
+  // Input links from peers (data/valid are inputs, ready is our backpressure output)
+  input  logic [63:0] port_in_data [7:0],
+  input  logic        port_in_valid[7:0],
+  output logic        port_in_ready[7:0],
+
+  // Output links to peers (data/valid are outputs, ready is the peer's backpressure input)
+  output logic [63:0] port_out_data [7:0],
+  output logic        port_out_valid[7:0],
+  input  logic        port_out_ready[7:0],
 
   input  logic [7:0] pe_x, pe_y,
 
@@ -37,50 +44,51 @@ module router_l0 (
   genvar gi;
   generate
     for (gi = 0; gi < 8; gi++) begin : gen_decode
-      assign f_dst_y[gi] = port_in[gi].data[63:56];
-      assign f_dst_x[gi] = port_in[gi].data[55:48];
-      assign f_bcast[gi] = port_in[gi].data[47:45];
+      assign f_dst_y[gi] = port_in_data[gi][63:56];
+      assign f_dst_x[gi] = port_in_data[gi][55:48];
+      assign f_bcast[gi] = port_in_data[gi][47:45];
     end
   endgenerate
 
   // --- Input routing logic: for each input, compute target output bitmap ---
   logic [7:0] in_target[7:0];
+  logic x_done, y_done;
 
   always_comb begin
     for (int p = 0; p < 8; p++) begin
       in_target[p] = 8'd0;
-      if (!port_in[p].valid) continue;
+      if (port_in_valid[p]) begin
+        x_done = (f_dst_x[p] == pe_x);
+        y_done = (f_dst_y[p] == pe_y);
 
-      logic x_done = (f_dst_x[p] == pe_x);
-      logic y_done = (f_dst_y[p] == pe_y);
-
-      unique case (f_bcast[p])
-        3'd1: begin
-          in_target[p][P_E] = 1'b1;
-          in_target[p][P_W] = 1'b1;
-        end
-        3'd2: begin
-          in_target[p][P_N] = 1'b1;
-          in_target[p][P_S] = 1'b1;
-        end
-        3'd3: begin
-          in_target[p][P_N]=1'b1; in_target[p][P_NE]=1'b1;
-          in_target[p][P_E]=1'b1; in_target[p][P_SE]=1'b1;
-          in_target[p][P_S]=1'b1;
-          in_target[p][P_W]=1'b1; in_target[p][P_NW]=1'b1;
-        end
-        default: begin
-          if (!x_done) begin
-            if (f_dst_x[p] > pe_x) in_target[p][P_E] = 1'b1;
-            else                    in_target[p][P_W] = 1'b1;
-          end else if (!y_done) begin
-            if (f_dst_y[p] > pe_y) in_target[p][P_S] = 1'b1;
-            else                    in_target[p][P_N] = 1'b1;
-          end else begin
-            in_target[p][P_LOCAL] = 1'b1;
+        unique case (f_bcast[p])
+          3'd1: begin
+            in_target[p][P_E] = 1'b1;
+            in_target[p][P_W] = 1'b1;
           end
-        end
-      endcase
+          3'd2: begin
+            in_target[p][P_N] = 1'b1;
+            in_target[p][P_S] = 1'b1;
+          end
+          3'd3: begin
+            in_target[p][P_N]=1'b1; in_target[p][P_NE]=1'b1;
+            in_target[p][P_E]=1'b1; in_target[p][P_SE]=1'b1;
+            in_target[p][P_S]=1'b1;
+            in_target[p][P_W]=1'b1; in_target[p][P_NW]=1'b1;
+          end
+          default: begin
+            if (!x_done) begin
+              if (f_dst_x[p] > pe_x) in_target[p][P_E] = 1'b1;
+              else                    in_target[p][P_W] = 1'b1;
+            end else if (!y_done) begin
+              if (f_dst_y[p] > pe_y) in_target[p][P_S] = 1'b1;
+              else                    in_target[p][P_N] = 1'b1;
+            end else begin
+              in_target[p][P_LOCAL] = 1'b1;
+            end
+          end
+        endcase
+      end
     end
   end
 
@@ -91,8 +99,8 @@ module router_l0 (
 
   always_comb begin
     inject_target = 8'd0;
-    logic x_done = (inject_dst_x == pe_x);
-    logic y_done = (inject_dst_y == pe_y);
+    x_done = (inject_dst_x == pe_x);
+    y_done = (inject_dst_y == pe_y);
 
     unique case (inject_bcast_mode)
       3'd1: begin
@@ -129,7 +137,7 @@ module router_l0 (
   always_comb begin
     for (int p = 0; p < 8; p++) begin
       for (int in = 0; in < 8; in++) begin
-        out_req[p][in] = port_in[in].valid && in_target[in][p];
+        out_req[p][in] = port_in_valid[in] && in_target[in][p];
       end
     end
   end
@@ -146,11 +154,11 @@ module router_l0 (
       logic       any_g;
 
       deadlock_free_arbiter arb (
-        .req           (out_req[ga]),
-        .priority      (out_prio[ga]),
-        .grant         (grant),
-        .any_grant     (any_g),
-        .priority_next (next_prio)
+        .req      (out_req[ga]),
+        .prio     (out_prio[ga]),
+        .grant    (grant),
+        .any_grant(any_g),
+        .prio_next(next_prio)
       );
 
       assign out_grant[ga] = grant;
@@ -166,17 +174,16 @@ module router_l0 (
   // --- Crossbar ---
   always_comb begin
     for (int p = 0; p < 8; p++) begin
-      port_out[p].valid = 1'b0;
-      port_out[p].data  = '0;
+      port_out_valid[p] = 1'b0;
+      port_out_data[p]  = '0;
       if (out_any[p]) begin
-        logic [2:0] src = out_grant[p];
-        port_out[p].valid = 1'b1;
-        port_out[p].data  = port_in[src].data;
+        port_out_valid[p] = 1'b1;
+        port_out_data[p]  = port_in_data[out_grant[p]];
       end
     end
   end
 
-  // --- BACKPRESSURE: input ready when its target output granted and ready ---
+  // --- BACKPRESSURE: input ready when its target output has been granted ---
   always_comb begin
     for (int in = 0; in < 8; in++) begin
       logic g;
@@ -186,7 +193,7 @@ module router_l0 (
           g = 1'b1;
         end
       end
-      port_in[in].ready = g;
+      port_in_ready[in] = g;
     end
   end
 
@@ -195,9 +202,9 @@ module router_l0 (
                         inject_local ? 1'b1 : |inject_target;
 
   // --- L1 offload ---
-  assign l1_offload_valid   = inject_to_l1;
-  assign l1_offload_dst_x   = inject_dst_x;
-  assign l1_offload_dst_y   = inject_dst_y;
-  assign l1_offload_data    = inject_data;
+  assign l1_offload_valid = inject_to_l1;
+  assign l1_offload_dst_x = inject_dst_x;
+  assign l1_offload_dst_y = inject_dst_y;
+  assign l1_offload_data  = inject_data;
 
 endmodule

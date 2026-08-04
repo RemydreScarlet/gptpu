@@ -3,13 +3,15 @@ import gptpu_pkg::*;
 module pe_core (
   input  logic [7:0] pe_x, pe_y,
 
-  // L0 NoC: individual signals per direction to avoid struct direction issues
-  output logic [63:0] l0_out_data  [8],
-  output logic        l0_out_valid [8],
-  input  logic        l0_out_ready [8],
-  input  logic [63:0] l0_in_data   [8],
-  input  logic        l0_in_valid  [8],
-  output logic        l0_in_ready  [8],
+  // L0 NoC cardinal ports (flattened per-direction to avoid iverilog array-slice
+  // limitation on continuous assignment in generate grids). Router port map is
+  // [1]=N, [2]=E, [3]=S, [4]=W; [0]=LOCAL and [5..7]=diagonals stay internal.
+  output logic [63:0] l0_N_data,  l0_E_data,  l0_S_data,  l0_W_data,
+  output logic        l0_N_valid, l0_E_valid, l0_S_valid, l0_W_valid,
+  input  logic        l0_N_ready, l0_E_ready, l0_S_ready, l0_W_ready,
+  input  logic [63:0] l0_N_in_data,  l0_E_in_data,  l0_S_in_data,  l0_W_in_data,
+  input  logic        l0_N_in_valid, l0_E_in_valid, l0_S_in_valid, l0_W_in_valid,
+  output logic        l0_N_in_ready, l0_E_in_ready, l0_S_in_ready, l0_W_in_ready,
 
   // L1 expressway (clk_noc domain)
   output logic [63:0] l1_out_data,
@@ -82,6 +84,7 @@ module pe_core (
   // --- Scalar data path ---
   logic [15:0] alu_result, reg_r6, scalar_wdata;
   logic [15:0] status_reg;
+  logic [15:0] sc_reg_rs, sc_reg_rt;
   fp8_e4m3_t   lut_entry_out;
 
   // --- Router inject/eject (async_port_controller interface) ---
@@ -99,8 +102,12 @@ module pe_core (
   logic         eject_ready;
 
   // --- Router internal ports (clk_noc domain) ---
-  noc_channel_t router_pin  [7:0];
-  noc_channel_t router_pout [7:0];
+  logic [63:0] router_pin_data [8];
+  logic        router_pin_valid[8];
+  logic        router_pin_ready[8];
+  logic [63:0] router_pout_data [8];
+  logic        router_pout_valid[8];
+  logic        router_pout_ready[8];
 
   // --- L1 offload signals ---
   logic        l1_offload_valid;
@@ -114,22 +121,26 @@ module pe_core (
   // ============================================================
 
   sram_512kb sram (
-    .addr0 (cce_sram_addr_a),
-    .cs0   (1'b1),
-    .we0   (1'b0),
-    .data0 (sram_data0_out),
-    .addr1 (cce_sram_addr_b),
-    .cs1   (1'b1),
-    .we1   (1'b0),
-    .data1 (sram_data1_out),
-    .addr2 (sram_addr_d_final),
-    .cs2   (sram_we | scalar_st | lut_read),
-    .we2   (sram_we | scalar_st | lut_read),
-    .data2 (sram_data2_in),
-    .addr3 ('0),
-    .cs3   (1'b0),
-    .we3   (1'b0),
-    .data3 (sram_data3_out),
+    .addr0  (cce_sram_addr_a),
+    .cs0    (1'b1),
+    .we0    (1'b0),
+    .data0_w('0),
+    .data0_r(sram_data0_out),
+    .addr1  (cce_sram_addr_b),
+    .cs1    (1'b1),
+    .we1    (1'b0),
+    .data1_w('0),
+    .data1_r(sram_data1_out),
+    .addr2  (sram_addr_d_final),
+    .cs2    (sram_we | scalar_st | lut_read),
+    .we2    (sram_we | scalar_st | lut_read),
+    .data2_w(sram_data2_in),
+    .data2_r(),
+    .addr3  ('0),
+    .cs3    (1'b0),
+    .we3    (1'b0),
+    .data3_w('0),
+    .data3_r(sram_data3_out),
     .clk_pe (clk_pe),
     .rst_n  (rst_n)
   );
@@ -147,14 +158,17 @@ module pe_core (
   );
 
   scalar_ctrl scalar (
-    .a        (scalar.reg_rs),
-    .b        (scalar.reg_rt),
+    .a        (sc_reg_rs),
+    .b        (sc_reg_rt),
     .opcode   (scalar_opcode),
     .rs_addr  (scalar_rs),
     .rt_addr  (scalar_rt),
     .rd_addr  (scalar_rd),
     .reg_we   (scalar_reg_we),
     .reg_wdata(scalar_wdata),
+    .reg_rs   (sc_reg_rs),
+    .reg_rt   (sc_reg_rt),
+    .reg_rd   (),
     .reg_r6   (reg_r6),
     .alu_result(alu_result),
     .cmp_eq   (cmp_eq),
@@ -169,12 +183,19 @@ module pe_core (
   );
 
   configurable_lut lut (
-    .entry_addr  (lut_addr),
-    .table_id    (lut_table_id),
-    .entry_out   (lut_entry_out),
-    .swap_lut    (lut_swap),
-    .clk_pe      (clk_pe),
-    .rst_n       (rst_n)
+    .entry_addr   (lut_addr),
+    .table_id     (lut_table_id),
+    .entry_out    (lut_entry_out),
+    .write_en     (1'b0),
+    .write_table  (4'd0),
+    .write_addr   (8'd0),
+    .write_data   (8'd0),
+    .swap_lut     (lut_swap),
+    .swap_done    (),
+    .boot_load    (1'b0),
+    .boot_table_id(4'd0),
+    .clk_pe       (clk_pe),
+    .rst_n        (rst_n)
   );
 
   coupled_compute_engine cce (
@@ -226,8 +247,12 @@ module pe_core (
   );
 
   router_l0 router (
-    .port_in          (router_pin),
-    .port_out         (router_pout),
+    .port_in_data     (router_pin_data),
+    .port_in_valid    (router_pin_valid),
+    .port_in_ready    (router_pin_ready),
+    .port_out_data    (router_pout_data),
+    .port_out_valid   (router_pout_valid),
+    .port_out_ready   (router_pout_ready),
     .pe_x             (pe_x),
     .pe_y             (pe_y),
     .inject_valid     (inject_router_valid),
@@ -267,26 +292,52 @@ module pe_core (
   // ============================================================
   // Router to NoC wiring (clk_noc domain)
   // ============================================================
-  genvar d;
-  generate
-    for (d = 1; d < 8; d++) begin : gen_noc_dirs
-      assign l0_out_data[d]  = router_pout[d].data;
-      assign l0_out_valid[d] = router_pout[d].valid;
-      assign router_pout[d].ready = l0_out_ready[d];
-      assign router_pin[d].data  = l0_in_data[d];
-      assign router_pin[d].valid = l0_in_valid[d];
-      assign l0_in_ready[d]     = router_pin[d].ready;
-    end
-  endgenerate
+  // N (router port 1)
+  assign l0_N_data  = router_pout_data[1];
+  assign l0_N_valid = router_pout_valid[1];
+  assign router_pout_ready[1] = l0_N_ready;
+  assign router_pin_data[1]   = l0_N_in_data;
+  assign router_pin_valid[1]  = l0_N_in_valid;
+  assign l0_N_in_ready        = router_pin_ready[1];
+
+  // E (router port 2)
+  assign l0_E_data  = router_pout_data[2];
+  assign l0_E_valid = router_pout_valid[2];
+  assign router_pout_ready[2] = l0_E_ready;
+  assign router_pin_data[2]   = l0_E_in_data;
+  assign router_pin_valid[2]  = l0_E_in_valid;
+  assign l0_E_in_ready        = router_pin_ready[2];
+
+  // S (router port 3)
+  assign l0_S_data  = router_pout_data[3];
+  assign l0_S_valid = router_pout_valid[3];
+  assign router_pout_ready[3] = l0_S_ready;
+  assign router_pin_data[3]   = l0_S_in_data;
+  assign router_pin_valid[3]  = l0_S_in_valid;
+  assign l0_S_in_ready        = router_pin_ready[3];
+
+  // W (router port 4)
+  assign l0_W_data  = router_pout_data[4];
+  assign l0_W_valid = router_pout_valid[4];
+  assign router_pout_ready[4] = l0_W_ready;
+  assign router_pin_data[4]   = l0_W_in_data;
+  assign router_pin_valid[4]  = l0_W_in_valid;
+  assign l0_W_in_ready        = router_pin_ready[4];
+
+  // Diagonals (router ports 5,6,7) tied off: dimension-order routing uses
+  // only cardinal directions.
+  assign router_pin_data[5] = '0;   assign router_pin_valid[5] = 1'b0;   assign router_pout_ready[5] = 1'b0;
+  assign router_pin_data[6] = '0;   assign router_pin_valid[6] = 1'b0;   assign router_pout_ready[6] = 1'b0;
+  assign router_pin_data[7] = '0;   assign router_pin_valid[7] = 1'b0;   assign router_pout_ready[7] = 1'b0;
 
   // LOCAL port (0)
-  assign eject_router_valid = router_pout[0].valid;
-  assign eject_router_data  = router_pout[0].data;
-  assign router_pout[0].ready = eject_router_ready;
+  assign eject_router_valid = router_pout_valid[0];
+  assign eject_router_data  = router_pout_data[0];
+  assign router_pout_ready[0] = eject_router_ready;
 
-  assign router_pin[0].data  = is_highway_node ? l1_in_data  : '0;
-  assign router_pin[0].valid = is_highway_node ? l1_in_valid : 1'b0;
-  assign l1_in_ready = is_highway_node ? router_pin[0].ready : 1'b0;
+  assign router_pin_data[0]  = is_highway_node ? l1_in_data  : '0;
+  assign router_pin_valid[0] = is_highway_node ? l1_in_valid : 1'b0;
+  assign l1_in_ready = is_highway_node ? router_pin_ready[0] : 1'b0;
 
   // L1 offload → l1_out
   assign l1_out_data  = l1_offload_data;
@@ -314,7 +365,7 @@ module pe_core (
           noc_dst_x,
           noc_mode,
           5'd0,
-          scalar.reg_rs  // payload from scalar register specified by scalar_send_src
+          sc_reg_rs  // payload from scalar register specified by scalar_send_src
         };
       end
     end
@@ -365,7 +416,7 @@ module pe_core (
   always_comb begin
     if (scalar_st) begin
       sram_data2_in = '0;
-      sram_data2_in[sram_addr_d_final[5:0]*8 +: 8] = scalar.reg_rs[7:0];
+      sram_data2_in[sram_addr_d_final[5:0]*8 +: 8] = sc_reg_rs[7:0];
     end else if (lut_read) begin
       for (int i = 0; i < VECTOR_LANE_WIDTH; i++)
         sram_data2_in[i*8 +: 8] = lut_entry_out;

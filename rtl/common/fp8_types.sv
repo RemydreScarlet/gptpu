@@ -1,8 +1,7 @@
-import gptpu_pkg::*;
+package fp8_pkg;
+  import gptpu_pkg::*;
 
-// FP8 E4M3 type definition and arithmetic primitives
-module fp8_types_base;
-  // Type defined in gptpu_pkg: fp8_e4m3_t (8-bit)
+  // FP8 E4M3 arithmetic primitives (referenced by vector_lane and emulator)
 
   // FP8 addition (E4M3)
   function automatic fp8_e4m3_t fp8_add(input fp8_e4m3_t a, input fp8_e4m3_t b);
@@ -96,4 +95,9 @@ module fp8_types_base;
     return {sign_r, exp_r, mant_r};
   endfunction
 
-endmodule
+  // FP8 subtraction (E4M3): add the negation of b (sign-flip), matching the emulator
+  function automatic fp8_e4m3_t fp8_sub(input fp8_e4m3_t a, input fp8_e4m3_t b);
+    return fp8_add(a, fp8_mul(b, fp8_e4m3_t'(8'hB8)));
+  endfunction
+
+endpackage

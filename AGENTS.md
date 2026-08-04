@@ -142,6 +142,8 @@ typedef struct packed {
 - 4バンクSRAMは同時アクセス可能（Bankごに独立アドレスポート）
 - Vector Laneは1サイクルで64B (SRAM 1ライン) を読み出し演算可能にする
 - `async_port_controller` はL0を全PEが、L1/L2は高速道路ノード判定後にのみインスタンス化
+- **L0ポートは方向ごとにフラット化**されたスカラ信号 (`l0_N_data/l0_N_valid/l0_N_ready`, `l0_N_in_*` 等)。ルータ内部ポート番号は [1]=N, [2]=E, [3]=S, [4]=W で、[0]=LOCAL と [5..7]=対角はPE内部で完結する
+- **iverilogは連続代入のgenerate内で配列ポート接続 (array slice) をサポートしない**ため、PE間配線は必ずスカラ方向信号にすること
 
 ### 5.2 Coupled Compute Engine (`coupled_compute_engine.sv`)
 **責務**: マイクロコードフェッチ・デコード、Vector/Scalar実行、分岐制御

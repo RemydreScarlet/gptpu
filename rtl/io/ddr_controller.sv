@@ -106,7 +106,7 @@ module ddr_controller (
     next_state = state;
     unique case (state)
       IDLE: if (read_valid && credit_available > 0)
-              next_state = read_not_write ? ACTIVATE : WRITE;
+              next_state = ddr_state_t'(read_not_write ? ACTIVATE : WRITE);
       ACTIVATE: next_state = READ;
       READ: if (burst_cnt == 0 && read_ready) next_state = DRAIN;
       WRITE: if (burst_cnt == 0) next_state = DRAIN;

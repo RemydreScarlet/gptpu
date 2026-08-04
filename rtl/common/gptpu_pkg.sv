@@ -66,9 +66,7 @@ package gptpu_pkg;
     logic        ready;
   } noc_channel_t;
 
-  typedef struct packed {
-    logic [FP8_E4M3_WIDTH-1:0] data [VECTOR_LANE_WIDTH-1:0];
-  } vector_line_t;
+  typedef logic [VECTOR_LANE_WIDTH*FP8_E4M3_WIDTH-1:0] vector_line_t;
 
   typedef struct packed {
     logic [7:0] dst_x;

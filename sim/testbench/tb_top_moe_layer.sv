@@ -2,7 +2,7 @@ import gptpu_pkg::*;
 
 module tb_top_moe_layer;
 
-  logic clk_ref, rst_n_ext;
+  logic clk_ref = 1'b0, rst_n_ext;
   wire  [DDR_BUS_WIDTH-1:0] ddr_bus;
   logic ddr_clk_p, ddr_clk_n, ddr_cke, ddr_cs_n;
   logic [1:0] ddr_bg, ddr_ba;

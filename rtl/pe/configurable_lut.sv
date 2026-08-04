@@ -52,8 +52,8 @@ module configurable_lut (
   // --- Write path ---
   integer t, e;
 
-  always_ff @(posedge clk_pe) begin
-    if (write_en && write_table >= 9 && write_table <= 15) begin
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (rst_n && write_en && write_table >= 9 && write_table <= 15) begin
       if (active_sel)
         shadow_mem[write_table][write_addr] <= write_data;
       else
@@ -62,15 +62,19 @@ module configurable_lut (
   end
 
   // --- Boot ROM initialization ---
-  always_ff @(posedge clk_pe) begin
-    if (boot_load) begin
+  function automatic fp8_e4m3_t boot_value(input int idx, input logic [3:0] tid);
+    case (tid)
+      4'd0:    boot_value = gptpu_pkg::lut_boot_tanh(idx);
+      4'd1:    boot_value = gptpu_pkg::lut_boot_exp(idx);
+      4'd2:    boot_value = gptpu_pkg::lut_boot_rsqrt(idx);
+      default: boot_value = fp8_e4m3_t'(idx);
+    endcase
+  endfunction
+
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (rst_n && boot_load) begin
       for (e = 0; e < LUT_ENTRIES; e++) begin
-        unique case (boot_table_id)
-          4'd0:  active_mem[0][e]  = lut_boot_tanh(e);
-          4'd1:  active_mem[1][e]  = lut_boot_exp(e);
-          4'd2:  active_mem[2][e]  = lut_boot_rsqrt(e);
-          default: active_mem[boot_table_id][e] = fp8_e4m3_t'(e);
-        endcase
+        active_mem[boot_table_id][e] = boot_value(e, boot_table_id);
       end
     end
   end

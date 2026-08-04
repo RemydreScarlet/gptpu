@@ -4,8 +4,12 @@ module tb_router;
 
   logic clk_noc, rst_n;
 
-  noc_channel_t port_in [7:0];
-  noc_channel_t port_out[7:0];
+  logic [63:0] port_in_data [7:0];
+  logic        port_in_valid[7:0];
+  logic        port_in_ready[7:0];
+  logic [63:0] port_out_data [7:0];
+  logic        port_out_valid[7:0];
+  logic        port_out_ready[7:0];
 
   logic [7:0] pe_x, pe_y;
   logic       inject_valid, inject_ready;
@@ -24,8 +28,12 @@ module tb_router;
   endfunction
 
   router_l0 dut (
-    .port_in          (port_in),
-    .port_out         (port_out),
+    .port_in_data     (port_in_data),
+    .port_in_valid    (port_in_valid),
+    .port_in_ready    (port_in_ready),
+    .port_out_data    (port_out_data),
+    .port_out_valid   (port_out_valid),
+    .port_out_ready   (port_out_ready),
     .pe_x             (pe_x),
     .pe_y             (pe_y),
     .inject_valid     (inject_valid),
@@ -50,8 +58,8 @@ module tb_router;
 
     // Clear all inputs
     for (int i = 0; i < 8; i++) begin
-      port_in[i].valid = 1'b0;
-      port_in[i].data  = '0;
+      port_in_valid[i] = 1'b0;
+      port_in_data[i]  = '0;
     end
     inject_valid = 1'b0;
     inject_data  = '0;
@@ -75,10 +83,10 @@ module tb_router;
     inject_valid = 1'b0;
 
     // Test 2: Transit from WEST (port 4) going EAST
-    port_in[4].valid = 1'b1;
-    port_in[4].data  = make_flit(8'd4, 8'd8, 3'd0);
+    port_in_valid[4] = 1'b1;
+    port_in_data[4]  = make_flit(8'd4, 8'd8, 3'd0);
     #20;
-    port_in[4].valid = 1'b0;
+    port_in_valid[4] = 1'b0;
 
     // Test 3: BCAST_ROW
     inject_dst_x = 8'd8;

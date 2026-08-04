@@ -88,6 +88,7 @@ module coupled_compute_engine (
     OP_BCAST  = 7'h40,
     OP_SEND   = 7'h41,
     OP_RECV   = 7'h42,
+    OP_TEST   = 7'h43,
     OP_STREAMV = 7'h50,
     OP_STREAMS = 7'h51,
     OP_SYNC   = 7'h52,

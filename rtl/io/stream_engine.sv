@@ -25,7 +25,7 @@ module stream_engine (
   logic [31:0] ptr;
   logic [31:0] remaining;
   logic [15:0] credit;
-  logic [1023:0] buf;
+  logic [1023:0] buf_reg;
   logic buf_valid;
 
   always_ff @(posedge clk_io or negedge rst_n) begin
@@ -35,7 +35,7 @@ module stream_engine (
       remaining <= '0;
       credit <= DDR_CREDIT_MAX;
       buf_valid <= 1'b0;
-      buf <= '0;
+      buf_reg <= '0;
       read_valid <= 1'b0;
       pe_stream_valid <= 1'b0;
     end else begin
@@ -57,7 +57,7 @@ module stream_engine (
             read_valid <= 1'b1;
             read_data_out <= '0;
             if (read_ready) begin
-              buf <= read_data_out;
+              buf_reg <= read_data_out;
               buf_valid <= 1'b1;
               ptr <= ptr + DDR_CACHE_LINE;
               remaining <= remaining - 1;
@@ -71,7 +71,7 @@ module stream_engine (
         ST_WRITE: begin
           if (stream_s && buf_valid && pe_stream_ready) begin
             pe_stream_valid <= 1'b1;
-            pe_stream_data <= buf;
+            pe_stream_data <= buf_reg;
             buf_valid <= 1'b0;
           end
           if (!buf_valid && remaining > 0) begin

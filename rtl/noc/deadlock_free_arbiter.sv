@@ -2,10 +2,10 @@ import gptpu_pkg::*;
 
 module deadlock_free_arbiter (
   input  logic [7:0] req,
-  input  logic [3:0] priority,
+  input  logic [3:0] prio,
   output logic [2:0] grant,
   output logic       any_grant,
-  output logic [3:0] priority_next
+  output logic [3:0] prio_next
 );
 
   logic [7:0] priority_mask;
@@ -15,7 +15,7 @@ module deadlock_free_arbiter (
   always_comb begin
     priority_mask = '1;
     for (int i = 0; i < 8; i++) begin
-      if (i < priority) priority_mask[i] = 1'b0;
+      if (i < prio) priority_mask[i] = 1'b0;
     end
   end
 
@@ -54,6 +54,6 @@ module deadlock_free_arbiter (
     endcase
   end
 
-  assign priority_next = any_grant ? (grant + 1) : priority;
+  assign prio_next = any_grant ? (grant + 1) : prio;
 
 endmodule

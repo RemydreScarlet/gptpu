@@ -3,14 +3,14 @@ import gptpu_pkg::*;
 module tb_pe_core;
 
   logic [7:0] pe_x, pe_y;
-  logic clk_pe, clk_noc, rst_n;
+  logic clk_pe = 1'b0, clk_noc = 1'b0, rst_n;
 
-  logic [63:0] l0_out_data  [8];
-  logic        l0_out_valid [8];
-  logic        l0_out_ready [8];
-  logic [63:0] l0_in_data   [8];
-  logic        l0_in_valid  [8];
-  logic        l0_in_ready  [8];
+  logic [63:0] l0_N_data,  l0_E_data,  l0_S_data,  l0_W_data;
+  logic        l0_N_valid, l0_E_valid, l0_S_valid, l0_W_valid;
+  logic        l0_N_ready, l0_E_ready, l0_S_ready, l0_W_ready;
+  logic [63:0] l0_N_in_data,  l0_E_in_data,  l0_S_in_data,  l0_W_in_data;
+  logic        l0_N_in_valid, l0_E_in_valid, l0_S_in_valid, l0_W_in_valid;
+  logic        l0_N_in_ready, l0_E_in_ready, l0_S_in_ready, l0_W_in_ready;
 
   logic [63:0] l1_out_data, l1_in_data;
   logic        l1_out_valid, l1_in_valid;
@@ -29,12 +29,30 @@ module tb_pe_core;
   pe_core dut (
     .pe_x         (pe_x),
     .pe_y         (pe_y),
-    .l0_out_data  (l0_out_data),
-    .l0_out_valid (l0_out_valid),
-    .l0_out_ready (l0_out_ready),
-    .l0_in_data   (l0_in_data),
-    .l0_in_valid  (l0_in_valid),
-    .l0_in_ready  (l0_in_ready),
+    .l0_N_data    (l0_N_data),
+    .l0_N_valid   (l0_N_valid),
+    .l0_N_ready   (l0_N_ready),
+    .l0_N_in_data (l0_N_in_data),
+    .l0_N_in_valid(l0_N_in_valid),
+    .l0_N_in_ready(l0_N_in_ready),
+    .l0_E_data    (l0_E_data),
+    .l0_E_valid   (l0_E_valid),
+    .l0_E_ready   (l0_E_ready),
+    .l0_E_in_data (l0_E_in_data),
+    .l0_E_in_valid(l0_E_in_valid),
+    .l0_E_in_ready(l0_E_in_ready),
+    .l0_S_data    (l0_S_data),
+    .l0_S_valid   (l0_S_valid),
+    .l0_S_ready   (l0_S_ready),
+    .l0_S_in_data (l0_S_in_data),
+    .l0_S_in_valid(l0_S_in_valid),
+    .l0_S_in_ready(l0_S_in_ready),
+    .l0_W_data    (l0_W_data),
+    .l0_W_valid   (l0_W_valid),
+    .l0_W_ready   (l0_W_ready),
+    .l0_W_in_data (l0_W_in_data),
+    .l0_W_in_valid(l0_W_in_valid),
+    .l0_W_in_ready(l0_W_in_ready),
     .l1_out_data  (l1_out_data),
     .l1_out_valid (l1_out_valid),
     .l1_out_ready (l1_out_ready),
