@@ -20,43 +20,22 @@ module vector_lane (
   input  logic rst_n
 );
 
-  // --- Unpacked FP8 lanes (packed vector_line_t <-> unpacked conversion below) ---
-  fp8_e4m3_t a_arr [VECTOR_LANE_WIDTH-1:0];
-  fp8_e4m3_t b_arr [VECTOR_LANE_WIDTH-1:0];
-  fp8_e4m3_t res_arr[VECTOR_LANE_WIDTH-1:0];
-  fp8_e4m3_t acc_arr[VECTOR_LANE_WIDTH-1:0];
+  // Fully packed accumulator (8 lanes x 8 bits). No unpacked arrays: iverilog
+  // does not simulate variable-indexed unpacked-array access correctly inside
+  // procedural blocks, so all lanes are accessed via packed part-selects.
+  logic [VECTOR_LANE_WIDTH*8-1:0] acc_vec;
 
-  genvar gi;
-  generate
-    for (gi = 0; gi < VECTOR_LANE_WIDTH; gi++) begin : gen_lane_conv
-      assign a_arr[gi] = line_a[gi*8 +: 8];
-      assign b_arr[gi] = line_b[gi*8 +: 8];
-      assign result[gi*8 +: 8] = res_arr[gi];
-      assign mac_acc_out[gi*8 +: 8] = acc_arr[gi];
-    end
-  endgenerate
-
-  // --- Local wrappers around package FP8 primitives ---
-  function automatic fp8_e4m3_t vadd(input fp8_e4m3_t a, input fp8_e4m3_t b);
-    return fp8_pkg::fp8_add(a, b);
-  endfunction
-  function automatic fp8_e4m3_t vsub(input fp8_e4m3_t a, input fp8_e4m3_t b);
-    return fp8_pkg::fp8_sub(a, b);
-  endfunction
-  function automatic fp8_e4m3_t vmul(input fp8_e4m3_t a, input fp8_e4m3_t b);
-    return fp8_pkg::fp8_mul(a, b);
-  endfunction
-
-  // --- FP8 MAC array ---
+  // --- FP8 MAC accumulate (sequential) ---
   always_ff @(posedge clk_pe or negedge rst_n) begin
     if (!rst_n) begin
-      for (int i = 0; i < VECTOR_LANE_WIDTH; i++) acc_arr[i] <= '0;
+      acc_vec <= '0;
     end else if (acc_en && opcode == 4'd0) begin
-      for (int i = 0; i < VECTOR_LANE_WIDTH; i++) begin
-        acc_arr[i] <= vadd(acc_arr[i], vmul(a_arr[i], b_arr[i]));
-      end
+      for (int i = 0; i < VECTOR_LANE_WIDTH; i++)
+        acc_vec[i*8 +: 8] <= fp8_pkg::fp8_add(acc_vec[i*8 +: 8],
+                                               fp8_pkg::fp8_mul(line_a[i*8 +: 8],
+                                                                line_b[i*8 +: 8]));
     end else if (!acc_en) begin
-      for (int i = 0; i < VECTOR_LANE_WIDTH; i++) acc_arr[i] <= '0;
+      acc_vec <= '0;
     end
   end
 
@@ -64,15 +43,19 @@ module vector_lane (
   always_comb begin
     for (int i = 0; i < VECTOR_LANE_WIDTH; i++) begin
       unique case (opcode)
-        4'd0: res_arr[i] = acc_arr[i];                                         // VMAC (pipelined)
-        4'd1: res_arr[i] = vadd(a_arr[i], b_arr[i]);                           // VADD
-        4'd2: res_arr[i] = vsub(a_arr[i], b_arr[i]);                           // VSUB
-        4'd3: res_arr[i] = vmul(a_arr[i], b_arr[i]);                           // VMUL
-        4'd4: res_arr[i] = (a_arr[i] < b_arr[i]) ? a_arr[i] : b_arr[i];        // VMIN
-        4'd5: res_arr[i] = (a_arr[i] > b_arr[i]) ? a_arr[i] : b_arr[i];        // VMAX
-        default: res_arr[i] = '0;
+        4'd0: result[i*8 +: 8] = acc_vec[i*8 +: 8];                                              // VMAC (pipelined)
+        4'd1: result[i*8 +: 8] = fp8_pkg::fp8_add(line_a[i*8 +: 8], line_b[i*8 +: 8]);           // VADD
+        4'd2: result[i*8 +: 8] = fp8_pkg::fp8_sub(line_a[i*8 +: 8], line_b[i*8 +: 8]);           // VSUB
+        4'd3: result[i*8 +: 8] = fp8_pkg::fp8_mul(line_a[i*8 +: 8], line_b[i*8 +: 8]);           // VMUL
+        4'd4: result[i*8 +: 8] = fp8_pkg::fp8_lt (line_a[i*8 +: 8], line_b[i*8 +: 8])
+                                   ? line_a[i*8 +: 8] : line_b[i*8 +: 8];                        // VMIN (signed)
+        4'd5: result[i*8 +: 8] = fp8_pkg::fp8_gt (line_a[i*8 +: 8], line_b[i*8 +: 8])
+                                   ? line_a[i*8 +: 8] : line_b[i*8 +: 8];                        // VMAX (signed)
+        default: result[i*8 +: 8] = '0;
       endcase
     end
   end
+
+  assign mac_acc_out = acc_vec;
 
 endmodule

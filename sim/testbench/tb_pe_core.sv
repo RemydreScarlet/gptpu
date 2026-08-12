@@ -12,12 +12,18 @@ module tb_pe_core;
   logic        l0_N_in_valid, l0_E_in_valid, l0_S_in_valid, l0_W_in_valid;
   logic        l0_N_in_ready, l0_E_in_ready, l0_S_in_ready, l0_W_in_ready;
 
-  logic [63:0] l1_out_data, l1_in_data;
-  logic        l1_out_valid, l1_in_valid;
-  logic        l1_out_ready, l1_in_ready;
-  logic [63:0] l2_out_data, l2_in_data;
-  logic        l2_out_valid, l2_in_valid;
-  logic        l2_out_ready, l2_in_ready;
+  logic [63:0] l1_N_data,  l1_E_data,  l1_S_data,  l1_W_data;
+  logic        l1_N_valid, l1_E_valid, l1_S_valid, l1_W_valid;
+  logic        l1_N_ready, l1_E_ready, l1_S_ready, l1_W_ready;
+  logic [63:0] l1_N_in_data,  l1_E_in_data,  l1_S_in_data,  l1_W_in_data;
+  logic        l1_N_in_valid, l1_E_in_valid, l1_S_in_valid, l1_W_in_valid;
+  logic        l1_N_in_ready, l1_E_in_ready, l1_S_in_ready, l1_W_in_ready;
+  logic [63:0] l2_E_data, l2_W_data;
+  logic        l2_E_valid, l2_W_valid;
+  logic        l2_E_ready, l2_W_ready;
+  logic [63:0] l2_E_in_data, l2_W_in_data;
+  logic        l2_E_in_valid, l2_W_in_valid;
+  logic        l2_E_in_ready, l2_W_in_ready;
 
   microcode_word_t instr;
   logic            instr_valid;
@@ -53,18 +59,18 @@ module tb_pe_core;
     .l0_W_in_data (l0_W_in_data),
     .l0_W_in_valid(l0_W_in_valid),
     .l0_W_in_ready(l0_W_in_ready),
-    .l1_out_data  (l1_out_data),
-    .l1_out_valid (l1_out_valid),
-    .l1_out_ready (l1_out_ready),
-    .l1_in_data   (l1_in_data),
-    .l1_in_valid  (l1_in_valid),
-    .l1_in_ready  (l1_in_ready),
-    .l2_out_data  (l2_out_data),
-    .l2_out_valid (l2_out_valid),
-    .l2_out_ready (l2_out_ready),
-    .l2_in_data   (l2_in_data),
-    .l2_in_valid  (l2_in_valid),
-    .l2_in_ready  (l2_in_ready),
+    .l1_N_data    (l1_N_data),    .l1_N_valid   (l1_N_valid),    .l1_N_ready   (l1_N_ready),
+    .l1_N_in_data (l1_N_in_data), .l1_N_in_valid(l1_N_in_valid), .l1_N_in_ready(l1_N_in_ready),
+    .l1_E_data    (l1_E_data),    .l1_E_valid   (l1_E_valid),    .l1_E_ready   (l1_E_ready),
+    .l1_E_in_data (l1_E_in_data), .l1_E_in_valid(l1_E_in_valid), .l1_E_in_ready(l1_E_in_ready),
+    .l1_S_data    (l1_S_data),    .l1_S_valid   (l1_S_valid),    .l1_S_ready   (l1_S_ready),
+    .l1_S_in_data (l1_S_in_data), .l1_S_in_valid(l1_S_in_valid), .l1_S_in_ready(l1_S_in_ready),
+    .l1_W_data    (l1_W_data),    .l1_W_valid   (l1_W_valid),    .l1_W_ready   (l1_W_ready),
+    .l1_W_in_data (l1_W_in_data), .l1_W_in_valid(l1_W_in_valid), .l1_W_in_ready(l1_W_in_ready),
+    .l2_E_data    (l2_E_data),    .l2_E_valid   (l2_E_valid),    .l2_E_ready   (l2_E_ready),
+    .l2_E_in_data (l2_E_in_data), .l2_E_in_valid(l2_E_in_valid), .l2_E_in_ready(l2_E_in_ready),
+    .l2_W_data    (l2_W_data),    .l2_W_valid   (l2_W_valid),    .l2_W_ready   (l2_W_ready),
+    .l2_W_in_data (l2_W_in_data), .l2_W_in_valid(l2_W_in_valid), .l2_W_in_ready(l2_W_in_ready),
     .instr        (instr),
     .instr_valid  (instr_valid),
     .pc           (pc),

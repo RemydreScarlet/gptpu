@@ -54,4 +54,15 @@ module async_port_controller (
     .rst_n_rd (rst_n)
   );
 
+  `ifdef APC_DBG
+  always_ff @(posedge clk_noc or negedge rst_n) begin
+    if (rst_n && (inject_router_valid || eject_router_valid))
+      $display("[%0t] APC inj_rdy=%b inj_v=%b inj_dst(%0d,%0d) ej_v=%b ej_rdy=%b ej_dst(%0d,%0d)",
+               $time, inject_router_ready, inject_router_valid,
+               inject_router_data[55:48], inject_router_data[63:56],
+               eject_router_valid, eject_router_ready,
+               eject_router_data[55:48], eject_router_data[63:56]);
+  end
+  `endif
+
 endmodule

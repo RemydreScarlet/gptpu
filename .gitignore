@@ -14,6 +14,9 @@ transcript
 *.log
 *.wlft
 *.mem
+build_loop
+build_tl1
+obj_dir
 
 # EDA tool workspaces
 xst/

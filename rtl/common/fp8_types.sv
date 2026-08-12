@@ -100,4 +100,25 @@ package fp8_pkg;
     return fp8_add(a, fp8_mul(b, fp8_e4m3_t'(8'hB8)));
   endfunction
 
+  // FP8 signed less-than (E4M3 sign-magnitude compare)
+  // Handles the sign bit correctly: -x < +y regardless of raw bit pattern.
+  function automatic logic fp8_lt(input fp8_e4m3_t a, input fp8_e4m3_t b);
+    logic [6:0] mag_a, mag_b;
+    mag_a = a[6:0];
+    mag_b = b[6:0];
+    if (mag_a == '0 && mag_b == '0)
+      fp8_lt = 1'b0;                       // -0.0 and +0.0 compare equal
+    else if (a[7] != b[7])
+      fp8_lt = a[7];                       // negative < positive
+    else if (a[7] == 1'b1)
+      fp8_lt = mag_a > mag_b;              // both negative: larger mag is smaller
+    else
+      fp8_lt = mag_a < mag_b;              // both positive
+  endfunction
+
+  // FP8 signed greater-than
+  function automatic logic fp8_gt(input fp8_e4m3_t a, input fp8_e4m3_t b);
+    return fp8_lt(b, a);
+  endfunction
+
 endpackage

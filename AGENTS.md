@@ -143,16 +143,10 @@ typedef struct packed {
 - Vector Laneは1サイクルで64B (SRAM 1ライン) を読み出し演算可能にする
 - `async_port_controller` はL0を全PEが、L1/L2は高速道路ノード判定後にのみインスタンス化
 - **L0ポートは方向ごとにフラット化**されたスカラ信号 (`l0_N_data/l0_N_valid/l0_N_ready`, `l0_N_in_*` 等)。ルータ内部ポート番号は [1]=N, [2]=E, [3]=S, [4]=W で、[0]=LOCAL と [5..7]=対角はPE内部で完結する
+- **PE内部のルータ接続配列 (`router_pin_*`, `router_pout_*`) は必ず descending `[7:0]` 形式で宣言すること**。Verilator 5.032 は ascending `[8]` と descending `[7:0]` のunpacked配列ポート接続を要素順にフラット化するため、`port_in[7] <-> router_pin[0]` のようにインデックスが反転し、LOCAL/L1配送が破壊される（tb_top_l1 の配送バグの根本原因だった）
+- **L1/L2ポートは方向別化済み**: `l1_{N,E,S,W}_{out,in}` (8本、out/data+valid+ready、in/data+valid+ready) と `l2_{E,W}_{out,in}` (4本)。`router_l1` と `router_l2` は **すべてのPEに無条件インスタンス化** し、非高速道路ノードではtopレベルで全入出力をtieする
+- `is_boundary_node` = `is_highway_node && ((pe_x%SN_GRID_X==0 && pe_x!=0) || (pe_y%SN_GRID_Y==0 && pe_y!=0))`
 - **iverilogは連続代入のgenerate内で配列ポート接続 (array slice) をサポートしない**ため、PE間配線は必ずスカラ方向信号にすること
-
-### 5.2 Coupled Compute Engine (`coupled_compute_engine.sv`)
-**責務**: マイクロコードフェッチ・デコード、Vector/Scalar実行、分岐制御
-
-**エージェント修正時の注意**:
-- PCは各PE独立（MIMD実行可能）
-- ループカウンタ `LC` は暗黙的レジスタ。`DJNZ` 命令でデクリメント
-- `LUT` 命令は `configurable_lut` へのアドレス指定。テーブルIDは4bit (0-15)
-- `BCAST` 命令の `mode` (ROW/COL/ALL) は、PEグリッド座標と組み合わせてルータが解釈
 
 ### 5.3 ルータ (`router_l0.sv`, `router_l1.sv`, `router_l2.sv`)
 **責務**: 距離適応型ルーティングとデッドロックフリー転送
@@ -160,23 +154,18 @@ typedef struct packed {
 **エージェント修正時の注意**:
 - **絶対に次元順序ルーティングから外れないこと**: X方向の残りホップが0になるまでY方向転送を開始しない
 - L1使用判定: `|dx| >= 4 || |dy| >= 4` かつ自PEが高速道路ノード `(x%4==0 && y%4==0)`
-- L2は境界高速道路ノードでのみ有効。隣接SN間のホップ削減
+- **L1はtileベースで動作**: 高速道路ノードは自タイル (span 4) 内の配送をLOCALポートからL0へ再注入する。L1ポート並びは `[0]=N,[1]=E,[2]=S,[3]=W`。topレベルで高速道路ノード間リンクをstep 4でラティス配線する (AのE_out→BのW_in、BのW_out→AのE_in。方向は「相手の受け側」に入る点に注意)
+- L2は境界高速道路ノードでのみ有効。`router_l2` は2ポート `[0]=E,[1]=W` のカットスルーで、SN境界 (x = SN_GRID_X, 2*SN_GRID_X, ...) を跨ぐ西/E東ノード対を専用リンクで接続する。高速道路間隔==SNサイズの構成ではL1と冗長になる
 
-### 5.4 Configurable LUT (`configurable_lut.sv`)
-**責務**: Bank 2先頭32KBの16テーブル×256エントリ管理、Active/Shadow切り替え
-
-**エージェント修正時の注意**:
-- Active/Shadowは物理的に2バンク構成。`SWAPL` でセレクタ切り替え（1サイクル）
-- Boot ROMからの初期化テーブル (Tanh, Exp, 1/√x など) は `rtl/common/gptpu_pkg.sv` に定数配列として保持
-- ユーザ定義テーブル (9-15) はDDR経由でロード可能にする
-
-### 5.5 DDR/Streamエンジン (`ddr_controller.sv`, `stream_engine.sv`)
+### 5.5 DDR/Streamエンジン (`ddr_controller.sv`, `stream_engine.sv`, `edge_io.sv`)
 **責務**: LPDDR5 PHY制御、Credit-Basedフロー制御、層ごとストリーミング
 
 **エージェント修正時の注意**:
+- **キャッシュラインは128B (1024bit)固定、DDRバスは512bit幅。2ワード/ラインの組立/分解は `ddr_controller` が内包** (バス側)。`edge_io` は1024bit↔512bit×2の分解をPE側で担当する
+- `ddr_controller` はトライステート `ddr_bus` + FSM (IDLE→ACTIVATE→TRCD_WAIT→READ/WRITE×2→PRECHARGE→TRP_WAIT) で駆動。req/respハンドシェイク
+- `edge_io` は北端 (y=0) の各PE columnの64bit flitを集約して1024bitキャッシュライン化し、DDRへ。DDRからは1024bitを2×512bit SRAMラインへ分解
+- `stream_engine` は STREAM.V(read)/STREAM.S(write) の命令デコードとDDRへの要求発行のみを担い、ライン転送のFIFO/組立は行わない
 - CreditはPEのSRAM空き容量から生成。Credit=0で自動停止（バックプレッシャー）
-- キャッシュラインは128B固定。Vector Lane幅と一致
-- `STREAM.V` / `STREAM.S` はマイクロコード命令として解釈された後、stream_engineがDDRコントローラを駆動
 
 ---
 
@@ -187,10 +176,18 @@ typedef struct packed {
 
 | テストベンチ | 検証内容 |
 |-------------|---------|
-| `tb_pe_core.sv` | 基本算術 (VMAC/VADD)、LUT参照、分岐、SRAMバンク競合 |
+| `tb_pe_core.sv` | 基本算術 (VMAC/VADD)、LUT参照、分岐、SRAMバンク競合、L1/L2ポート接続 |
 | `tb_router.sv` | 8方向同時通信、L1高速道路到達、デッドロックフリー確認 |
+| `tb_l1.sv` | router_l1 tileベースルーティング (オフロード/配送) |
 | `tb_async_fifo.sv` | 非同期クロックドメイン跨ぎデータ転送、メタスタビリティ |
 | `tb_lut_swap.sv` | SWAPL命令の1サイクル切り替え、グリッチチェック |
+| `tb_lut.sv` | LUT bootロードとtop-level write経路 |
+| `tb_ddr.sv` | ddr_controller + ビヘイビアDDRモデルのround-trip |
+| `tb_stream.sv` | STREAM.V/S命令のreq/resp発行 |
+| `tb_edge.sv` | edge_ioの北端集約と1024↔512分解 |
+| `tb_pipeline.sv` | DDR↔PEフル結合データパスround-trip |
+| `tb_top_moe_layer.sv` | MoE層トップ統合（スモーク） |
+| `tb_top_l1.sv` | L1エクスプレスウェイ統合テスト（T1 E-W / T2 N-S / T3 L0のみ。`make top_l1` で実行、PASS） |
 
 ### 6.2 統合テスト（目標）
 - **Conway's Life**: 最小グリッド (8x8) でCAシミュレーション。近傍通信とLUT[15]の動作確認
@@ -200,6 +197,8 @@ typedef struct packed {
 ### 6.3 シミュレータ連携
 - `sim/emulator/` はサイクル精度エミュレータ。RTLと同じメモリマップ・ISAを持つ
 - エミュレータとRTLの結果不一致が発生した場合、**RTLを修正する前に仕様の解釈を再確認**すること
+- **検証ツール**: シミュレーション検証は **Verilator主軸**。iverilog 12はunpacked配列書き込みが`x`になるバグがあるため**構造コンパイル/lint専用**
+- 全TBは `make -C sim unit` で一括実行 (MakefileにVerilatorビルド定義あり)
 
 ---
 

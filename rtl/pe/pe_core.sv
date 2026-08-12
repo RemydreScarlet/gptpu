@@ -13,21 +13,21 @@ module pe_core (
   input  logic        l0_N_in_valid, l0_E_in_valid, l0_S_in_valid, l0_W_in_valid,
   output logic        l0_N_in_ready, l0_E_in_ready, l0_S_in_ready, l0_W_in_ready,
 
-  // L1 expressway (clk_noc domain)
-  output logic [63:0] l1_out_data,
-  output logic        l1_out_valid,
-  input  logic        l1_out_ready,
-  input  logic [63:0] l1_in_data,
-  input  logic        l1_in_valid,
-  output logic        l1_in_ready,
+  // L1 expressway links (clk_noc domain); highway nodes only (x%4==0,y%4==0)
+  output logic [63:0] l1_N_data,  l1_E_data,  l1_S_data,  l1_W_data,
+  output logic        l1_N_valid, l1_E_valid, l1_S_valid, l1_W_valid,
+  input  logic        l1_N_ready, l1_E_ready, l1_S_ready, l1_W_ready,
+  input  logic [63:0] l1_N_in_data,  l1_E_in_data,  l1_S_in_data,  l1_W_in_data,
+  input  logic        l1_N_in_valid, l1_E_in_valid, l1_S_in_valid, l1_W_in_valid,
+  output logic        l1_N_in_ready, l1_E_in_ready, l1_S_in_ready, l1_W_in_ready,
 
-  // L2 SN-boundary (clk_noc domain)
-  output logic [63:0] l2_out_data,
-  output logic        l2_out_valid,
-  input  logic        l2_out_ready,
-  input  logic [63:0] l2_in_data,
-  input  logic        l2_in_valid,
-  output logic        l2_in_ready,
+  // L2 SN-boundary links (clk_noc domain); boundary highway nodes only
+  output logic [63:0] l2_E_data, l2_W_data,
+  output logic        l2_E_valid, l2_W_valid,
+  input  logic        l2_E_ready, l2_W_ready,
+  input  logic [63:0] l2_E_in_data, l2_W_in_data,
+  input  logic        l2_E_in_valid, l2_W_in_valid,
+  output logic        l2_E_in_ready, l2_W_in_ready,
 
   // Microcode memory interface (clk_pe domain)
   input  microcode_word_t instr,
@@ -39,6 +39,22 @@ module pe_core (
   input  logic         stream_valid,
   output logic         stream_ready,
 
+  // LUT user-table programming (clk_pe domain; tables 9-15 via DDR)
+  input  logic         lut_write_en,
+  input  logic [3:0]   lut_write_table,
+  input  logic [7:0]   lut_write_addr,
+  input  fp8_e4m3_t    lut_write_data,
+
+  // --- Test hooks (tie off / ignored in normal operation) ---
+  // Direct NoC injection (bypasses CCE): holds valid until test_inject_ready.
+  input  logic         test_inject_valid,
+  input  logic [63:0]  test_inject_data,   // {dst_y, dst_x, bcast, flags, payload}
+  output logic         test_inject_ready,
+  output logic [63:0]  test_eject_data,
+  output logic         test_eject_valid,
+  output logic         test_l1_valid,      // any L1 egress active at this PE
+  output logic         test_l2_valid,      // any L2 egress active at this PE
+
   // Local clocks
   input  logic clk_pe,
   input  logic clk_noc,
@@ -47,7 +63,11 @@ module pe_core (
 
   logic is_highway_node, is_boundary_node;
   assign is_highway_node  = (pe_x % 4 == 0) && (pe_y % 4 == 0);
-  assign is_boundary_node = (pe_x % 4 == 0) && (pe_y % 4 == 0);
+  // Boundary highway node: a highway node sitting on an SN boundary
+  // (x multiple of SN_GRID_X but not the outer edge, or y likewise).
+  assign is_boundary_node = is_highway_node &&
+        (((pe_x % SN_GRID_X == 0) && (pe_x != 0)) ||
+         ((pe_y % SN_GRID_Y == 0) && (pe_y != 0)));
 
   // --- CCE control signals (clk_pe domain) ---
   logic [3:0]  vec_opcode;
@@ -64,6 +84,27 @@ module pe_core (
   logic [7:0]  lut_addr;
   logic [3:0]  lut_table_id;
   logic        lut_swap, lut_read;
+
+  // --- LUT boot loader: after reset deassert, populate tables 0-2 over 3 cycles ---
+  logic [1:0]  lut_boot_cnt;
+  logic        lut_booting;
+  logic        lut_boot_load;
+  logic [3:0]  lut_boot_table_id;
+
+  always_ff @(posedge clk_pe or negedge rst_n) begin
+    if (!rst_n) begin
+      lut_booting  <= 1'b1;
+      lut_boot_cnt <= 2'd0;
+    end else if (lut_booting) begin
+      if (lut_boot_cnt == 2'd2)
+        lut_booting <= 1'b0;
+      else
+        lut_boot_cnt <= lut_boot_cnt + 2'd1;
+    end
+  end
+
+  assign lut_boot_load     = lut_booting;
+  assign lut_boot_table_id = {2'b00, lut_boot_cnt};
   logic [7:0]  noc_dst_x, noc_dst_y;
   logic [2:0]  noc_mode;
   logic        noc_send;
@@ -102,12 +143,15 @@ module pe_core (
   logic         eject_ready;
 
   // --- Router internal ports (clk_noc domain) ---
-  logic [63:0] router_pin_data [8];
-  logic        router_pin_valid[8];
-  logic        router_pin_ready[8];
-  logic [63:0] router_pout_data [8];
-  logic        router_pout_valid[8];
-  logic        router_pout_ready[8];
+  // Declared with descending [7:0] forms so element alignment matches Verilator's
+  // positional flattening of unpacked arrays; an ascending [8] declaration here
+  // would connect port_in[7] <-> router_pin[0] (index reversed).
+  logic [63:0] router_pin_data [7:0];
+  logic        router_pin_valid[7:0];
+  logic        router_pin_ready[7:0];
+  logic [63:0] router_pout_data [7:0];
+  logic        router_pout_valid[7:0];
+  logic        router_pout_ready[7:0];
 
   // --- L1 offload signals ---
   logic        l1_offload_valid;
@@ -186,14 +230,14 @@ module pe_core (
     .entry_addr   (lut_addr),
     .table_id     (lut_table_id),
     .entry_out    (lut_entry_out),
-    .write_en     (1'b0),
-    .write_table  (4'd0),
-    .write_addr   (8'd0),
-    .write_data   (8'd0),
+    .write_en     (lut_write_en),
+    .write_table  (lut_write_table),
+    .write_addr   (lut_write_addr),
+    .write_data   (lut_write_data),
     .swap_lut     (lut_swap),
     .swap_done    (),
-    .boot_load    (1'b0),
-    .boot_table_id(4'd0),
+    .boot_load    (lut_boot_load),
+    .boot_table_id(lut_boot_table_id),
     .clk_pe       (clk_pe),
     .rst_n        (rst_n)
   );
@@ -272,8 +316,8 @@ module pe_core (
   );
 
   async_port_controller apc (
-    .inject_data         (inject_data),
-    .inject_valid        (inject_valid),
+    .inject_data         (test_inject_valid ? test_inject_data : inject_data),
+    .inject_valid        (test_inject_valid ? test_inject_valid : inject_valid),
     .inject_ready        (inject_ready),
     .inject_router_data  (inject_router_data),
     .inject_router_valid (inject_router_valid),
@@ -288,6 +332,12 @@ module pe_core (
     .clk_noc             (clk_noc),
     .rst_n               (rst_n)
   );
+
+  assign test_inject_ready = inject_ready;
+  assign test_eject_data   = eject_data;
+  assign test_eject_valid  = eject_valid;
+  assign test_l1_valid     = l1_N_valid | l1_E_valid | l1_S_valid | l1_W_valid;
+  assign test_l2_valid     = l2_E_valid | l2_W_valid;
 
   // ============================================================
   // Router to NoC wiring (clk_noc domain)
@@ -335,19 +385,71 @@ module pe_core (
   assign eject_router_data  = router_pout_data[0];
   assign router_pout_ready[0] = eject_router_ready;
 
-  assign router_pin_data[0]  = is_highway_node ? l1_in_data  : '0;
-  assign router_pin_valid[0] = is_highway_node ? l1_in_valid : 1'b0;
-  assign l1_in_ready = is_highway_node ? router_pin_ready[0] : 1'b0;
+  // ============================================================
+  // L1 Expressway router (highway nodes only; inert elsewhere)
+  // L1 offload from the L0 router enters via local_in; flits whose
+  // destination is inside this highway node's tile are returned through
+  // local_out into the L0 router's LOCAL port for final delivery.
+  // ============================================================
+  logic [63:0] l1_deliver_data;
+  logic        l1_deliver_valid;
+  logic        l1_deliver_ready;
 
-  // L1 offload → l1_out
-  assign l1_out_data  = l1_offload_data;
-  assign l1_out_valid = l1_offload_valid;
-  assign l1_offload_ready = l1_out_ready;
+  router_l1 l1_router (
+    .port_in_data     ({l1_W_in_data, l1_S_in_data, l1_E_in_data, l1_N_in_data}),
+    .port_in_valid    ({l1_W_in_valid, l1_S_in_valid, l1_E_in_valid, l1_N_in_valid}),
+    .port_in_ready    ({l1_W_in_ready, l1_S_in_ready, l1_E_in_ready, l1_N_in_ready}),
+    .port_out_data    ({l1_W_data,     l1_S_data,     l1_E_data,     l1_N_data}),
+    .port_out_valid   ({l1_W_valid,    l1_S_valid,    l1_E_valid,    l1_N_valid}),
+    .port_out_ready   ({l1_W_ready,    l1_S_ready,    l1_E_ready,    l1_N_ready}),
+    .local_in_data    (l1_offload_data),
+    .local_in_valid   (l1_offload_valid),
+    .local_in_ready   (l1_offload_ready),
+    .local_out_data   (l1_deliver_data),
+    .local_out_valid  (l1_deliver_valid),
+    .local_out_ready  (l1_deliver_ready),
+    .pe_x             (pe_x),
+    .pe_y             (pe_y),
+    .clk_noc          (clk_noc),
+    .rst_n            (rst_n)
+  );
 
-  // L2: direct pass-through
-  assign l2_out_data  = l2_in_data;
-  assign l2_out_valid = l2_in_valid;
-  assign l2_in_ready  = l2_out_ready;
+  // L1 delivery re-injects into the L0 router via the LOCAL port
+  assign router_pin_data[0]  = l1_deliver_data;
+  assign router_pin_valid[0] = l1_deliver_valid;
+  assign l1_deliver_ready    = router_pin_ready[0];
+
+  // ============================================================
+  // L2 SN-boundary router (boundary highway nodes only; inert elsewhere).
+  // Router port [0]=E (to the east of the SN boundary), [1]=W (west).
+  // ============================================================
+  logic [63:0] l2_deliver_data;
+  logic        l2_deliver_valid;
+  logic        l2_deliver_ready;
+  logic        l2_local_ready;
+
+  router_l2 l2_router (
+    .port_in_data    ({l2_W_in_data, l2_E_in_data}),
+    .port_in_valid   ({l2_W_in_valid, l2_E_in_valid}),
+    .port_in_ready   ({l2_W_in_ready, l2_E_in_ready}),
+    .port_out_data   ({l2_W_data, l2_E_data}),
+    .port_out_valid  ({l2_W_valid, l2_E_valid}),
+    .port_out_ready  ({l2_W_ready, l2_E_ready}),
+    .local_in_data   (l1_offload_data),
+    .local_in_valid  (l1_offload_valid),
+    .local_in_ready  (l2_local_ready),
+    .local_out_data  (l2_deliver_data),
+    .local_out_valid (l2_deliver_valid),
+    .local_out_ready (l2_deliver_ready),
+    .pe_x            (pe_x),
+    .pe_y            (pe_y),
+    .clk_noc         (clk_noc),
+    .rst_n           (rst_n)
+  );
+
+  assign l2_deliver_ready = 1'b0;  // L2 local egress unused (pass-through mesh)
+  // l2_local_ready is driven by the l2_router's local_in_ready output
+  // (== local_out_ready == 0), so no external drive is needed here.
 
   // ============================================================
   // SEND / BCAST: flit generation with scalar register payload
@@ -424,5 +526,16 @@ module pe_core (
       sram_data2_in = vec_result;
     end
   end
+
+  `ifdef PE_DBG
+  always_ff @(posedge clk_noc or negedge rst_n) begin
+    if (rst_n && (inject_router_valid || eject_router_valid || eject_valid ||
+                  l1_deliver_valid || router_pin_valid[7]))
+      $strobe("[%0t] PE(%0d,%0d) l1dV=%0b pinV7=%0b pinV0=%0b ejRV=%0b ejRRDY=%0b injRV=%0b dst(%0d,%0d)",
+               $time, pe_x, pe_y, l1_deliver_valid, router_pin_valid[7], router_pin_valid[0],
+               eject_router_valid, eject_router_ready, inject_router_valid,
+               eject_router_data[55:48], eject_router_data[63:56]);
+  end
+  `endif
 
 endmodule
