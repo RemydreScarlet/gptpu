@@ -33,7 +33,7 @@ RUNTIMEOUT := 120
 
 all: unit
 
-unit: tb_async_fifo tb_fp8 tb_router tb_l1 tb_lut tb_lut_swap tb_status tb_pe_core tb_ddr tb_stream tb_edge tb_pipeline tb_top
+unit: tb_async_fifo tb_fp8 tb_router tb_l1 tb_lut tb_lut_swap tb_status tb_pe_core tb_ddr tb_stream tb_edge tb_pipeline tb_top top_l1
 
 define RUN_TB
 	mkdir -p $(BUILD)
@@ -93,8 +93,9 @@ tb_top:
 	@echo "== $(@) =="
 	$(call RUN_TB,tb_top_moe_layer,$(COMMON) $(NOC) $(PE_ALL) $(IO) $(RTL_DIR)/top/gptpu_top.sv $(DDR_MDL))
 
-# tb_top_l1 is a known WIP integration test (L1 expressway functional).
-# It currently FAILS delivery (latent routing bug) and is excluded from `unit`.
+# tb_top_l1: L1 expressway integration test (T1 E-W / T2 N-S / T3 L0-only).
+# Passes. Kept as a separate target because it elaborates the full 16x8 mesh
+# (heavy), and also included in `unit` so it is not silently skipped.
 top_l1:
 	@echo "== $(@) =="
 	$(call RUN_TB,tb_top_l1,$(COMMON) $(NOC) $(PE_ALL) $(IO) $(RTL_DIR)/top/gptpu_top.sv $(DDR_MDL))
