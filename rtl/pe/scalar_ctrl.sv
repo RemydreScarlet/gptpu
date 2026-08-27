@@ -69,8 +69,8 @@ module scalar_ctrl (
       3'd6: alu_result = a >> b[3:0];
       3'd7: begin
         cmp_eq = (a == b);
-        cmp_lt = ($signed(a) < $signed(b));
-        cmp_gt = ($signed(a) > $signed(b));
+        cmp_lt = (a < b);
+        cmp_gt = (a > b);
         alu_result = '0;
       end
       default: alu_result = '0;

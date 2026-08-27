@@ -85,8 +85,8 @@ module pe_core (
   logic [3:0]  lut_table_id;
   logic        lut_swap, lut_read;
 
-  // --- LUT boot loader: after reset deassert, populate tables 0-2 over 3 cycles ---
-  logic [1:0]  lut_boot_cnt;
+  // --- LUT boot loader: after reset deassert, populate tables 0-15 over 16 cycles ---
+  logic [3:0]  lut_boot_cnt;
   logic        lut_booting;
   logic        lut_boot_load;
   logic [3:0]  lut_boot_table_id;
@@ -94,17 +94,17 @@ module pe_core (
   always_ff @(posedge clk_pe or negedge rst_n) begin
     if (!rst_n) begin
       lut_booting  <= 1'b1;
-      lut_boot_cnt <= 2'd0;
+      lut_boot_cnt <= 4'd0;
     end else if (lut_booting) begin
-      if (lut_boot_cnt == 2'd2)
+      if (lut_boot_cnt == 4'd15)
         lut_booting <= 1'b0;
       else
-        lut_boot_cnt <= lut_boot_cnt + 2'd1;
+        lut_boot_cnt <= lut_boot_cnt + 4'd1;
     end
   end
 
   assign lut_boot_load     = lut_booting;
-  assign lut_boot_table_id = {2'b00, lut_boot_cnt};
+  assign lut_boot_table_id = lut_boot_cnt;
   logic [7:0]  noc_dst_x, noc_dst_y;
   logic [2:0]  noc_mode;
   logic        noc_send;
@@ -167,17 +167,19 @@ module pe_core (
   sram_512kb sram (
     .addr0  (cce_sram_addr_a),
     .cs0    (1'b1),
-    .we0    (1'b0),
-    .data0_w('0),
+    .we0    (scalar_st),
+    .data0_w({504'h0, sc_reg_rs[7:0]}),
     .data0_r(sram_data0_out),
+    .bwe0   (scalar_st),
+    .baddr0 (cce_sram_addr_a[5:0]),
     .addr1  (cce_sram_addr_b),
     .cs1    (1'b1),
     .we1    (1'b0),
     .data1_w('0),
     .data1_r(sram_data1_out),
     .addr2  (sram_addr_d_final),
-    .cs2    (sram_we | scalar_st | lut_read),
-    .we2    (sram_we | scalar_st | lut_read),
+    .cs2    (sram_we | lut_read),
+    .we2    (sram_we | lut_read),
     .data2_w(sram_data2_in),
     .data2_r(),
     .addr3  ('0),
@@ -486,7 +488,9 @@ module pe_core (
     if (!rst_n)
       status_reg <= '0;
     else if (status_we)
-      status_reg <= {14'd0, status_out};
+      status_reg <= {{14{status_out[1]}}, status_out};  // sign-extend: -1 -> 0xFFFF
+    else if (scalar_recv)
+      status_reg <= {15'd0, eject_valid};                // RECV: 1=received, 0=empty
   end
 
   // ============================================================
@@ -512,14 +516,11 @@ module pe_core (
   assign line_a = vector_line_t'(sram_data0_out);
   assign line_b = vector_line_t'(sram_data1_out);
 
-  assign sram_addr_d_final = vec_nd ? reg_r6 : (scalar_st ? cce_sram_addr_a : cce_sram_addr_d);
+  assign sram_addr_d_final = vec_nd ? reg_r6 : cce_sram_addr_d;
 
   // SRAM Bank2 write data mux
   always_comb begin
-    if (scalar_st) begin
-      sram_data2_in = '0;
-      sram_data2_in[sram_addr_d_final[5:0]*8 +: 8] = sc_reg_rs[7:0];
-    end else if (lut_read) begin
+    if (lut_read) begin
       for (int i = 0; i < VECTOR_LANE_WIDTH; i++)
         sram_data2_in[i*8 +: 8] = lut_entry_out;
     end else begin

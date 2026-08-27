@@ -3,7 +3,12 @@ package fp8_pkg;
 
   // FP8 E4M3 arithmetic primitives (referenced by vector_lane and emulator)
 
-  // FP8 addition (E4M3)
+  // FP8 addition (E4M3). Mirrors the cycle-accurate emulator (fp8_add) exactly:
+  //  - NaN/Inf (exp==15) propagates for EITHER operand -> 0xF8
+  //  - opposite-sign add is a magnitude subtraction with mantissa
+  //    renormalization (shift left until bit-3 set, exp decremented),
+  //    underflowing to zero when the exponent would hit <= 0
+  //  - operand swap when |b| > |a| in the subtraction path
   function automatic fp8_e4m3_t fp8_add(input fp8_e4m3_t a, input fp8_e4m3_t b);
     logic [7:0] sign_a, sign_b, sign_r;
     logic [3:0] exp_a, exp_b, exp_r;
@@ -11,10 +16,12 @@ package fp8_pkg;
     logic [3:0] mant_a_ext, mant_b_ext;
     logic [4:0] mant_sum;
     logic [3:0] exp_diff;
-    logic [7:0] result;
 
     sign_a = a[7]; exp_a = a[6:3]; mant_a = a[2:0];
     sign_b = b[7]; exp_b = b[6:3]; mant_b = b[2:0];
+
+    if (exp_a == 4'd15) return fp8_e4m3_t'(8'hF8);  // NaN/Inf
+    if (exp_b == 4'd15) return fp8_e4m3_t'(8'hF8);  // NaN/Inf
 
     if (exp_a == 4'd0) mant_a_ext = {1'b0, mant_a};
     else               mant_a_ext = {1'b1, mant_a};
@@ -22,59 +29,66 @@ package fp8_pkg;
     if (exp_b == 4'd0) mant_b_ext = {1'b0, mant_b};
     else               mant_b_ext = {1'b1, mant_b};
 
-    if (exp_a == 4'd15) begin
-      return {sign_a, 4'd15, 3'b000};  // NaN/Inf
-    end
-
     if (exp_a >= exp_b) begin
       exp_diff = exp_a - exp_b;
+      if (exp_diff > 4'd7) exp_diff = 4'd7;
       mant_b_ext = mant_b_ext >> exp_diff;
       exp_r = exp_a;
+      sign_r = sign_a;
     end else begin
       exp_diff = exp_b - exp_a;
+      if (exp_diff > 4'd7) exp_diff = 4'd7;
       mant_a_ext = mant_a_ext >> exp_diff;
       exp_r = exp_b;
-      sign_a = sign_b;
+      sign_r = sign_b;
     end
 
     if (sign_a == sign_b) begin
-      mant_sum = mant_a_ext + mant_b_ext;
+      mant_sum = {1'b0, mant_a_ext} + {1'b0, mant_b_ext};
       sign_r = sign_a;
+      if (mant_sum[4]) begin
+        mant_sum = mant_sum >> 1;
+        exp_r = exp_r + 1;
+      end
     end else begin
-      mant_sum = mant_a_ext - mant_b_ext;
-      sign_r = sign_a;
+      if (mant_a_ext >= mant_b_ext) begin
+        mant_sum = {1'b0, mant_a_ext} - {1'b0, mant_b_ext};
+        sign_r = sign_a;
+      end else begin
+        mant_sum = {1'b0, mant_b_ext} - {1'b0, mant_a_ext};
+        sign_r = sign_b;
+      end
+      // Renormalize: shift mantissa left until bit-3 set (at most 3 shifts).
+      for (int k = 0; k < 4; k++) begin
+        if (mant_sum != 0 && !mant_sum[3]) begin
+          if (exp_r <= 4'd1) return fp8_e4m3_t'(8'd0);  // exp would hit <= 0
+          mant_sum = mant_sum << 1;
+          exp_r = exp_r - 1;
+        end
+      end
     end
 
-    if (mant_sum[4]) begin
-      mant_sum = mant_sum >> 1;
-      exp_r = exp_r + 1;
-    end
-
-    if (exp_r >= 4'd15) begin
-      result = {sign_r, 4'd15, 3'b000};
-    end else if (mant_sum == 0) begin
-      result = {1'b0, 4'd0, 3'b000};
-    end else begin
-      result = {sign_r, exp_r, mant_sum[2:0]};
-    end
-
-    return fp8_e4m3_t'(result);
+    if (exp_r >= 4'd15) return fp8_e4m3_t'(8'hF8);
+    if (mant_sum == 0)  return fp8_e4m3_t'(8'd0);
+    return {sign_r, exp_r, mant_sum[2:0]};
   endfunction
 
-  // FP8 multiplication (E4M3)
+  // FP8 multiplication (E4M3). Mirrors the emulator (fp8_mul) exactly:
+  // NaN/Inf (exp==15) propagates for EITHER operand -> 0xF8.
   function automatic fp8_e4m3_t fp8_mul(input fp8_e4m3_t a, input fp8_e4m3_t b);
     logic        sign_r;
-    logic [3:0]  exp_r;
-    logic [5:0]  mant_prod;
+    logic signed [5:0] exp_r;
+    logic [7:0]  mant_prod;
     logic [2:0]  mant_r;
 
     sign_r = a[7] ^ b[7];
 
-    if (a[6:3] == 4'd0 || b[6:3] == 4'd0) begin
+    if (a[6:3] == 4'd0 || b[6:3] == 4'd0)
       return fp8_e4m3_t'(8'd0);
-    end
+    if (a[6:3] == 4'd15 || b[6:3] == 4'd15)
+      return fp8_e4m3_t'(8'hF8);
 
-    exp_r = a[6:3] + b[6:3] - 4'd7;
+    exp_r = $signed({2'b00, a[6:3]}) + $signed({2'b00, b[6:3]}) - 6'sd7;
 
     // mantissa: 1.xxx * 1.xxx = 2 bits before decimal
     mant_prod = {1'b1, a[2:0]} * {1'b1, b[2:0]};
@@ -86,13 +100,10 @@ package fp8_pkg;
       mant_r = mant_prod[3:1];
     end
 
-    if (exp_r >= 4'd15) begin
-      return {sign_r, 4'd15, 3'b000};
-    end else if (exp_r <= 4'd0) begin
-      return fp8_e4m3_t'(8'd0);
-    end
+    if (exp_r >= 6'sd15) return fp8_e4m3_t'(8'hF8);
+    if (exp_r <= 6'sd0)  return fp8_e4m3_t'(8'd0);
 
-    return {sign_r, exp_r, mant_r};
+    return {sign_r, exp_r[3:0], mant_r};
   endfunction
 
   // FP8 subtraction (E4M3): add the negation of b (sign-flip), matching the emulator

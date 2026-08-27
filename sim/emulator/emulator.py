@@ -122,6 +122,24 @@ def fp8_mul(a: int, b: int) -> int:
     return (sign_r << 7) | (exp_r << 3) | mant_r
 
 
+def fp8_lt(a: int, b: int) -> bool:
+    """FP8 signed less-than (E4M3 sign-magnitude compare)."""
+    mag_a = a & 0x7F
+    mag_b = b & 0x7F
+    if mag_a == 0 and mag_b == 0:
+        return False                     # -0.0 and +0.0 compare equal
+    if (a >> 7) != (b >> 7):
+        return bool(a >> 7)              # negative < positive
+    if (a >> 7) == 1:
+        return mag_a > mag_b             # both negative: larger mag is smaller
+    return mag_a < mag_b                 # both positive
+
+
+def fp8_gt(a: int, b: int) -> bool:
+    """FP8 signed greater-than (E4M3 sign-magnitude compare)."""
+    return fp8_lt(b, a)
+
+
 # === PE State ===
 class PEState:
     def __init__(self, pe_id: int, pe_x: int, pe_y: int):
@@ -314,10 +332,10 @@ class Emulator:
             elif opcode == OPCODES['VMUL']:
                 result = [fp8_mul(line_a[i], line_b[i]) for i in range(VECTOR_LANE_WIDTH)]
             elif opcode == OPCODES['VMIN']:
-                result = [line_a[i] if line_a[i] < line_b[i] else line_b[i]
+                result = [line_a[i] if fp8_lt(line_a[i], line_b[i]) else line_b[i]
                           for i in range(VECTOR_LANE_WIDTH)]
             elif opcode == OPCODES['VMAX']:
-                result = [line_a[i] if line_a[i] > line_b[i] else line_b[i]
+                result = [line_a[i] if fp8_gt(line_a[i], line_b[i]) else line_b[i]
                           for i in range(VECTOR_LANE_WIDTH)]
             pe.write_sram_line(2, addr_d, result)
 

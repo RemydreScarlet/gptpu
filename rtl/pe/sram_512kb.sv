@@ -6,6 +6,8 @@ module sram_512kb (
   input  logic         cs0, we0,
   input  logic [511:0] data0_w,
   output logic [511:0] data0_r,
+  input  logic         bwe0,        // byte-write enable (scalar ST)
+  input  logic [5:0]   baddr0,      // byte offset within the line
 
   // Bank 1 interface
   input  logic [15:0] addr1,
@@ -48,8 +50,15 @@ module sram_512kb (
     if (!rst_n) begin
       data0_r <= '0;
     end else if (cs0) begin
-      if (we0) mem0[addr0[15:6]] <= data0_w;
-      else     data0_r <= mem0[addr0[15:6]];
+      if (we0) begin
+        if (bwe0) begin
+          mem0[addr0[15:6]][baddr0*8 +: 8] <= data0_w[7:0];  // byte-granular ST
+        end else begin
+          mem0[addr0[15:6]] <= data0_w;
+        end
+      end else begin
+        data0_r <= mem0[addr0[15:6]];
+      end
     end else begin
       data0_r <= '0;
     end

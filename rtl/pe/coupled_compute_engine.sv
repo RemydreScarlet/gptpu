@@ -268,7 +268,8 @@ module coupled_compute_engine (
           scalar_rs     = imm[2:0];
           scalar_rt     = imm[5:3];
           status_we     = 1'b1;
-          status_out    = (cmp_eq ? 2'd0 : cmp_lt ? 2'd1 : 2'd2);
+          // Signed 2-bit status: -1 (eq=0,lt=1), 0 (eq), +1 (gt)
+          status_out    = cmp_eq ? 2'b00 : cmp_lt ? 2'b11 : 2'b01;
         end
 
         // --- LDI / LD / ST ---
@@ -303,26 +304,28 @@ module coupled_compute_engine (
         end
 
         // --- Branch / control ---
+        // Branches consume the SCMP status register (signed 2-bit:
+        // -1=2'b11, 0=2'b00, +1=2'b01), matching the emulator.
         OP_BNE: begin
-          if (!cmp_eq) begin
+          if (status_in != 2'b00) begin
             pc_next = pc_reg + 13'(1) + $signed(branch_offset);
             branch_taken = 1'b1;
           end
         end
         OP_BEQ: begin
-          if (cmp_eq) begin
+          if (status_in == 2'b00) begin
             pc_next = pc_reg + 13'(1) + $signed(branch_offset);
             branch_taken = 1'b1;
           end
         end
         OP_BLT: begin
-          if (cmp_lt) begin
+          if (status_in[1]) begin
             pc_next = pc_reg + 13'(1) + $signed(branch_offset);
             branch_taken = 1'b1;
           end
         end
         OP_BGT: begin
-          if (cmp_gt) begin
+          if (status_in == 2'b01) begin
             pc_next = pc_reg + 13'(1) + $signed(branch_offset);
             branch_taken = 1'b1;
           end

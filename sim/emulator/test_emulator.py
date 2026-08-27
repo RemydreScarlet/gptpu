@@ -828,6 +828,57 @@ def test_vmin_vmax():
     test("VMAX: max(2.0, 1.0) = 2.0 (0x40)",
          all(v == 0x40 for v in line2), f"got {[f'{v:02x}' for v in line2[:3]]}...")
 
+    # Negative numbers: raw unsigned compare would pick the wrong operand.
+    # -1.0 = 0xB8 (sign-magnitude, raw 0xB8 > 0x40 unsigned).
+    emu3 = Emulator()
+    pe0_3 = emu3.pes[0]
+    for i in range(8):
+        pe0_3.sram[0][i * 8] = 0xB8  # -1.0
+        pe0_3.sram[1][i * 8] = 0x40  # +2.0
+
+    code3 = make_padded_sn([
+        make_instr(OPCODES['VMIN'], 0),
+        make_instr(OPCODES['HALT']),
+    ])
+    emu3.load_microcode(0, code3)
+    emu3.run(100)
+    line3 = pe0_3.read_sram_line(2, 0)
+    test("VMIN: min(-1.0, 2.0) = -1.0 (0xB8) [signed]",
+         all(v == 0xB8 for v in line3), f"got {[f'{v:02x}' for v in line3[:3]]}...")
+
+    emu4 = Emulator()
+    pe0_4 = emu4.pes[0]
+    for i in range(8):
+        pe0_4.sram[0][i * 8] = 0xB8  # -1.0
+        pe0_4.sram[1][i * 8] = 0x40  # +2.0
+
+    code4 = make_padded_sn([
+        make_instr(OPCODES['VMAX'], 0),
+        make_instr(OPCODES['HALT']),
+    ])
+    emu4.load_microcode(0, code4)
+    emu4.run(100)
+    line4 = pe0_4.read_sram_line(2, 0)
+    test("VMAX: max(-1.0, 2.0) = 2.0 (0x40) [signed]",
+         all(v == 0x40 for v in line4), f"got {[f'{v:02x}' for v in line4[:3]]}...")
+
+    # Both negative: -1.0 (0xB8) vs -0.5 (0x97) -> max is -0.5
+    emu5 = Emulator()
+    pe0_5 = emu5.pes[0]
+    for i in range(8):
+        pe0_5.sram[0][i * 8] = 0xB8  # -1.0
+        pe0_5.sram[1][i * 8] = 0x97  # -0.5
+
+    code5 = make_padded_sn([
+        make_instr(OPCODES['VMAX'], 0),
+        make_instr(OPCODES['HALT']),
+    ])
+    emu5.load_microcode(0, code5)
+    emu5.run(100)
+    line5 = pe0_5.read_sram_line(2, 0)
+    test("VMAX: max(-1.0, -0.5) = -0.5 (0x97) [signed]",
+         all(v == 0x97 for v in line5), f"got {[f'{v:02x}' for v in line5[:3]]}...")
+
 
 def test_test_instruction():
     print("\n--- TEST Instruction ---")

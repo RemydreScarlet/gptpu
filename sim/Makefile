@@ -33,7 +33,7 @@ RUNTIMEOUT := 120
 
 all: unit
 
-unit: tb_async_fifo tb_router tb_l1 tb_lut tb_lut_swap tb_pe_core tb_ddr tb_stream tb_edge tb_pipeline tb_top
+unit: tb_async_fifo tb_fp8 tb_router tb_l1 tb_lut tb_lut_swap tb_status tb_pe_core tb_ddr tb_stream tb_edge tb_pipeline tb_top
 
 define RUN_TB
 	mkdir -p $(BUILD)
@@ -48,6 +48,10 @@ tb_async_fifo:
 tb_router:
 	@echo "== $(@) =="
 	$(call RUN_TB,tb_router,$(COMMON) $(NOC))
+
+tb_fp8:
+	@echo "== $(@) =="
+	$(call RUN_TB,tb_fp8,$(COMMON))
 
 tb_l1:
 	@echo "== $(@) =="
@@ -64,6 +68,10 @@ tb_lut_swap:
 tb_pe_core:
 	@echo "== $(@) =="
 	$(call RUN_TB,tb_pe_core,$(COMMON) $(NOC) $(PE_ALL))
+
+tb_status:
+	@echo "== $(@) =="
+	$(call RUN_TB,tb_status,$(COMMON) $(NOC) $(PE_ALL))
 
 tb_ddr:
 	@echo "== $(@) =="
